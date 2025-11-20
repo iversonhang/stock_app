@@ -12,17 +12,36 @@ st.set_page_config(
 )
 
 # --- HELPER FUNCTIONS ---
-@st.cache_data(ttl=300) # Cache data for 5 minutes to prevent rate limiting
-def get_stock_data(ticker):
-    stock = yf.Ticker(ticker)
-    # Check if stock exists by trying to fetch info
+
+# FIX 1: Split the original function. 
+# We cache the DATA (info dictionary), not the Object.
+@st.cache_data(ttl=300) 
+def get_stock_info(ticker):
+    """
+    Fetches the stock info dictionary. 
+    This is cacheable because a dictionary is serializable.
+    """
     try:
+        stock = yf.Ticker(ticker)
         info = stock.info
+        # Validation: Ensure it's a valid stock
         if 'symbol' not in info:
             return None
-    except:
+        return info
+    except Exception:
         return None
-    return stock
+
+# FIX 2: Create a specific cached function for charts
+@st.cache_data(ttl=300)
+def get_stock_history(ticker, period):
+    stock = yf.Ticker(ticker)
+    return stock.history(period=period)
+
+# FIX 3: Create a specific cached function for financials
+@st.cache_data(ttl=300)
+def get_financials_data(ticker):
+    stock = yf.Ticker(ticker)
+    return stock.financials, stock.balance_sheet, stock.cashflow
 
 @st.cache_data(ttl=300)
 def get_market_indices():
@@ -84,40 +103,35 @@ if page == "Global Headlines":
             st.info("No news available at the moment.")
         
         for article in market_news:
-            # FIX: Use .get() to safely retrieve data. If missing, skip the article.
             title = article.get('title')
             link = article.get('link')
             publisher = article.get('publisher', 'Unknown Source')
             publish_time_raw = article.get('providerPublishTime')
 
-            # If essential info is missing, skip this news item
             if not title or not link:
                 continue
 
             with st.container():
                 col1, col2 = st.columns([1, 3])
                 
-                # Image handling
                 with col1:
                     has_image = False
                     if 'thumbnail' in article and 'resolutions' in article['thumbnail']:
                         try:
-                            # Try to get the first resolution url
                             resolutions = article['thumbnail']['resolutions']
                             if resolutions:
                                 st.image(resolutions[0]['url'], use_column_width=True)
                                 has_image = True
                         except:
-                            pass # Fail silently on image errors
+                            pass 
                     
                     if not has_image:
-                        st.write("📰") # Placeholder icon
+                        st.write("📰") 
                 
                 with col2:
                     st.markdown(f"### [{title}]({link})")
                     st.write(f"**Publisher:** {publisher}")
                     
-                    # Safe timestamp conversion
                     if publish_time_raw:
                         try:
                             pub_time = datetime.fromtimestamp(publish_time_raw)
@@ -136,11 +150,10 @@ elif page == "Stock Analyst Pro":
     
     if ticker_input:
         with st.spinner(f'Analyzing {ticker_input}...'):
-            stock = get_stock_data(ticker_input)
+            # FIX: Call the new cached function that returns a Dictionary (not an object)
+            info = get_stock_info(ticker_input)
             
-            if stock:
-                info = stock.info
-                
+            if info:
                 # --- HEADER SECTION ---
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col1:
@@ -166,7 +179,8 @@ elif page == "Stock Analyst Pro":
                     st.subheader("Technical Analysis")
                     time_period = st.select_slider("Select Time Range", options=['1mo', '3mo', '6mo', '1y', '2y', '5y'], value='1y')
                     
-                    hist = stock.history(period=time_period)
+                    # FIX: Use cached history function
+                    hist = get_stock_history(ticker_input, time_period)
                     
                     if not hist.empty:
                         fig = go.Figure()
@@ -219,12 +233,15 @@ elif page == "Stock Analyst Pro":
                     fin_type = st.selectbox("Select Statement", ["Income Statement", "Balance Sheet", "Cash Flow"])
                     
                     try:
+                        # FIX: Call cached financials function
+                        financials, balance_sheet, cashflow = get_financials_data(ticker_input)
+                        
                         if fin_type == "Income Statement":
-                            st.dataframe(stock.financials)
+                            st.dataframe(financials)
                         elif fin_type == "Balance Sheet":
-                            st.dataframe(stock.balance_sheet)
+                            st.dataframe(balance_sheet)
                         elif fin_type == "Cash Flow":
-                            st.dataframe(stock.cashflow)
+                            st.dataframe(cashflow)
                     except:
                         st.write("Financial statement data unavailable.")
 
