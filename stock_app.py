@@ -71,12 +71,31 @@ def get_financials_data(ticker):
 def get_ticker_news(ticker):
     """
     Fetches specific news for a ticker.
+    Includes a fallback mechanism if yfinance returns empty.
     """
+    news_items = []
+    
+    # Method 1: Try yfinance library
     try:
         stock = yf.Ticker(ticker)
-        return stock.news
+        news_items = stock.news
     except Exception:
-        return []
+        pass
+        
+    # Method 2: Fallback to direct API request if yfinance returns empty
+    if not news_items:
+        try:
+            # This endpoint often provides news even when the main ticker endpoint fails
+            url = f"https://query2.finance.yahoo.com/v1/finance/search?q={ticker}&quotesCount=0&newsCount=10"
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+            response = requests.get(url, headers=headers)
+            data = response.json()
+            if 'news' in data:
+                news_items = data['news']
+        except Exception:
+            pass
+            
+    return news_items
 
 @st.cache_data(ttl=300)
 def get_market_indices():
@@ -328,7 +347,7 @@ elif page == "Stock Analyst Pro":
                     stock_news = get_ticker_news(selected_ticker)
                     
                     if not stock_news:
-                        st.info("No recent news found for this stock.")
+                        st.info(f"No recent news found specifically for {selected_ticker}. This might be due to API limits or lack of recent stories.")
                     else:
                         # Slice to top 20 items
                         for article in stock_news[:20]:
@@ -341,7 +360,7 @@ elif page == "Stock Analyst Pro":
                                 continue
 
                             with st.container():
-                                col1, col2 = st.columns([1, 4]) # Adjusted ratio for smaller thumbnails
+                                col1, col2 = st.columns([1, 4])
                                 
                                 with col1:
                                     has_image = False
