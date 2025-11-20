@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
+import requests
 from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
@@ -13,15 +14,43 @@ st.set_page_config(
 
 # --- HELPER FUNCTIONS ---
 
+@st.cache_data(ttl=3600)
+def search_symbol(query):
+    """
+    Searches for a stock symbol using Yahoo Finance's public API.
+    Returns a list of dictionaries with symbol and name.
+    """
+    try:
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=10&newsCount=0"
+        # User-Agent is required to avoid 403 Forbidden errors
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        response = requests.get(url, headers=headers)
+        data = response.json()
+        
+        results = []
+        if 'quotes' in data:
+            for quote in data['quotes']:
+                # Only include equity/stocks to keep results relevant
+                if 'symbol' in quote and 'shortname' in quote:
+                    results.append({
+                        'symbol': quote['symbol'],
+                        'name': quote['shortname'],
+                        'exch': quote.get('exchange', 'N/A'),
+                        'type': quote.get('quoteType', 'N/A')
+                    })
+        return results
+    except Exception as e:
+        return []
+
 @st.cache_data(ttl=300) 
 def get_stock_info(ticker):
     """
     Fetches the stock info dictionary. 
-    This is cacheable because a dictionary is serializable.
     """
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
+        # Basic validation to ensure it's a valid stock
         if 'symbol' not in info:
             return None
         return info
@@ -91,7 +120,6 @@ if page == "Global Headlines":
     # 2. News Feed
     st.subheader("Top Financial Stories")
     
-    # FIX: Aggregate news from multiple sources to ensure the feed isn't empty
     news_sources = ['SPY', 'QQQ', 'DIA', 'NVDA', 'AAPL', 'MSFT']
     all_news = []
     seen_titles = set()
@@ -99,7 +127,6 @@ if page == "Global Headlines":
     with st.spinner("Fetching latest headlines..."):
         for ticker in news_sources:
             try:
-                # No caching here to ensure news is fresh
                 ticker_news = yf.Ticker(ticker).news
                 for article in ticker_news:
                     title = article.get('title')
@@ -109,13 +136,12 @@ if page == "Global Headlines":
             except Exception:
                 continue
 
-    # Sort by publication time (newest first)
+    # Sort by publication time
     all_news.sort(key=lambda x: x.get('providerPublishTime', 0), reverse=True)
 
     if not all_news:
-        st.info("No news available at the moment. The data feed might be momentarily down.")
+        st.info("No news available at the moment.")
     else:
-        # Display top 15 unique stories
         for article in all_news[:15]:
             title = article.get('title')
             link = article.get('link')
@@ -157,11 +183,32 @@ if page == "Global Headlines":
 elif page == "Stock Analyst Pro":
     st.title("🔎 US Stock Analyzer")
     
-    ticker_input = st.text_input("Enter Stock Ticker (e.g., AAPL, NVDA, TSLA):", "AAPL").upper()
+    search_query = st.text_input("Search by Company Name or Ticker (e.g., 'Apple' or 'AAPL'):")
     
-    if ticker_input:
-        with st.spinner(f'Analyzing {ticker_input}...'):
-            info = get_stock_info(ticker_input)
+    selected_ticker = None
+
+    if search_query:
+        # 1. Perform Search
+        results = search_symbol(search_query)
+        
+        if results:
+            # 2. Create options for Selectbox
+            # Format: "AAPL - Apple Inc. (NAS)"
+            options = [f"{r['symbol']} - {r['name']} ({r['exch']})" for r in results]
+            
+            # 3. Let user choose if multiple results, default to first
+            if len(options) > 0:
+                choice = st.selectbox("Select Company:", options)
+                # Extract ticker from string "AAPL - Apple Inc." -> "AAPL"
+                selected_ticker = choice.split(" - ")[0]
+        else:
+            st.warning("No results found. Try checking the spelling.")
+
+    # 4. Proceed with Analysis if a ticker is selected
+    if selected_ticker:
+        st.markdown("---")
+        with st.spinner(f'Analyzing {selected_ticker}...'):
+            info = get_stock_info(selected_ticker)
             
             if info:
                 # --- HEADER SECTION ---
@@ -171,7 +218,7 @@ elif page == "Stock Analyst Pro":
                     if logo:
                         st.image(logo, width=100)
                 with col2:
-                    st.header(f"{info.get('shortName', 'N/A')} ({ticker_input})")
+                    st.header(f"{info.get('shortName', 'N/A')} ({selected_ticker})")
                     st.write(f"{info.get('sector', 'N/A')} | {info.get('industry', 'N/A')}")
                 with col3:
                     current_price = info.get('currentPrice', info.get('regularMarketPrice', 0))
@@ -189,7 +236,7 @@ elif page == "Stock Analyst Pro":
                     st.subheader("Technical Analysis")
                     time_period = st.select_slider("Select Time Range", options=['1mo', '3mo', '6mo', '1y', '2y', '5y'], value='1y')
                     
-                    hist = get_stock_history(ticker_input, time_period)
+                    hist = get_stock_history(selected_ticker, time_period)
                     
                     if not hist.empty:
                         fig = go.Figure()
@@ -203,7 +250,7 @@ elif page == "Stock Analyst Pro":
                         fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA20'], line=dict(color='orange', width=1), name='SMA 20'))
                         fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA50'], line=dict(color='blue', width=1), name='SMA 50'))
                         
-                        fig.update_layout(title=f'{ticker_input} Price History', xaxis_rangeslider_visible=False, height=600)
+                        fig.update_layout(title=f'{selected_ticker} Price History', xaxis_rangeslider_visible=False, height=600)
                         st.plotly_chart(fig, use_container_width=True)
                     else:
                         st.warning("No chart data available.")
@@ -242,7 +289,7 @@ elif page == "Stock Analyst Pro":
                     fin_type = st.selectbox("Select Statement", ["Income Statement", "Balance Sheet", "Cash Flow"])
                     
                     try:
-                        financials, balance_sheet, cashflow = get_financials_data(ticker_input)
+                        financials, balance_sheet, cashflow = get_financials_data(selected_ticker)
                         
                         if fin_type == "Income Statement":
                             st.dataframe(financials)
@@ -264,4 +311,4 @@ elif page == "Stock Analyst Pro":
                     st.write(f"**Headquarters:** {info.get('city', '')}, {info.get('state', '')}")
 
             else:
-                st.error("Stock ticker not found. Please check the symbol and try again.")
+                st.error("Stock data not found. Please check the symbol and try again.")
