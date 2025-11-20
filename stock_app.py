@@ -29,16 +29,7 @@ def get_market_indices():
     # S&P 500, Dow Jones, Nasdaq, Gold, Crude Oil
     tickers = ['^GSPC', '^DJI', '^IXIC', 'GC=F', 'CL=F']
     data = yf.download(tickers, period="1d", progress=False)['Close']
-    # yfinance download structure changed recently, handling multi-index
-    if isinstance(data.columns, pd.MultiIndex):
-        current_prices = data.iloc[-1]
-        prev_prices = yf.download(tickers, period="5d", progress=False)['Close'].iloc[-2]
-    else:
-        # Fallback logic if structure differs
-        current_prices = data.iloc[-1]
-        prev_prices = data.iloc[0] # Simplified
-        
-    return current_prices, prev_prices
+    return data
 
 def format_number(num):
     if num:
@@ -62,8 +53,6 @@ if page == "Global Headlines":
     # 1. Market Overview Ticker
     st.subheader("Market Snapshot")
     try:
-        # Fetching live data for indices
-        # Note: We fetch individually to ensure data stability
         indices = {
             "S&P 500": "^GSPC",
             "Dow Jones": "^DJI",
@@ -88,32 +77,61 @@ if page == "Global Headlines":
 
     # 2. News Feed
     st.subheader("Top Financial Stories")
-    # We use a general ticker like SPY to get broad market news
-    market_news = yf.Ticker("SPY").news
-    
-    for article in market_news:
-        with st.container():
-            col1, col2 = st.columns([1, 3])
-            # Check if thumbnail exists
-            if 'thumbnail' in article and 'resolutions' in article['thumbnail']:
+    try:
+        market_news = yf.Ticker("SPY").news
+        
+        if not market_news:
+            st.info("No news available at the moment.")
+        
+        for article in market_news:
+            # FIX: Use .get() to safely retrieve data. If missing, skip the article.
+            title = article.get('title')
+            link = article.get('link')
+            publisher = article.get('publisher', 'Unknown Source')
+            publish_time_raw = article.get('providerPublishTime')
+
+            # If essential info is missing, skip this news item
+            if not title or not link:
+                continue
+
+            with st.container():
+                col1, col2 = st.columns([1, 3])
+                
+                # Image handling
                 with col1:
-                    try:
-                        st.image(article['thumbnail']['resolutions'][0]['url'], use_column_width=True)
-                    except:
-                        st.write("📰")
-            
-            with col2:
-                st.markdown(f"### [{article['title']}]({article['link']})")
-                st.write(f"**Publisher:** {article['publisher']}")
-                # Convert timestamp
-                pub_time = datetime.fromtimestamp(article['providerPublishTime'])
-                st.caption(f"Published: {pub_time.strftime('%Y-%m-%d %H:%M')}")
-            st.divider()
+                    has_image = False
+                    if 'thumbnail' in article and 'resolutions' in article['thumbnail']:
+                        try:
+                            # Try to get the first resolution url
+                            resolutions = article['thumbnail']['resolutions']
+                            if resolutions:
+                                st.image(resolutions[0]['url'], use_column_width=True)
+                                has_image = True
+                        except:
+                            pass # Fail silently on image errors
+                    
+                    if not has_image:
+                        st.write("📰") # Placeholder icon
+                
+                with col2:
+                    st.markdown(f"### [{title}]({link})")
+                    st.write(f"**Publisher:** {publisher}")
+                    
+                    # Safe timestamp conversion
+                    if publish_time_raw:
+                        try:
+                            pub_time = datetime.fromtimestamp(publish_time_raw)
+                            st.caption(f"Published: {pub_time.strftime('%Y-%m-%d %H:%M')}")
+                        except:
+                            st.caption("Published: Recently")
+                st.divider()
+
+    except Exception as e:
+        st.warning("News feed is temporarily unavailable.")
 
 elif page == "Stock Analyst Pro":
     st.title("🔎 US Stock Analyzer")
     
-    # Search Bar
     ticker_input = st.text_input("Enter Stock Ticker (e.g., AAPL, NVDA, TSLA):", "AAPL").upper()
     
     if ticker_input:
@@ -126,14 +144,19 @@ elif page == "Stock Analyst Pro":
                 # --- HEADER SECTION ---
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col1:
-                    st.image(info.get('logo_url', ''), width=100)
+                    logo = info.get('logo_url', '')
+                    if logo:
+                        st.image(logo, width=100)
                 with col2:
                     st.header(f"{info.get('shortName', 'N/A')} ({ticker_input})")
                     st.write(f"{info.get('sector', 'N/A')} | {info.get('industry', 'N/A')}")
                 with col3:
                     current_price = info.get('currentPrice', info.get('regularMarketPrice', 0))
                     prev_close = info.get('previousClose', 0)
-                    st.metric("Current Price", f"${current_price}", f"{current_price - prev_close:.2f}")
+                    if current_price and prev_close:
+                        st.metric("Current Price", f"${current_price}", f"{current_price - prev_close:.2f}")
+                    else:
+                        st.write("Price data unavailable")
 
                 # --- TABS FOR ANALYSIS ---
                 tab1, tab2, tab3, tab4 = st.tabs(["Chart", "Fundamentals", "Financials", "Company Profile"])
@@ -143,24 +166,24 @@ elif page == "Stock Analyst Pro":
                     st.subheader("Technical Analysis")
                     time_period = st.select_slider("Select Time Range", options=['1mo', '3mo', '6mo', '1y', '2y', '5y'], value='1y')
                     
-                    # Get Historical Data
                     hist = stock.history(period=time_period)
                     
-                    # Plotly Candlestick Chart
-                    fig = go.Figure()
-                    fig.add_trace(go.Candlestick(x=hist.index,
-                                    open=hist['Open'], high=hist['High'],
-                                    low=hist['Low'], close=hist['Close'], name='Price'))
-                    
-                    # Add Moving Averages
-                    hist['SMA20'] = hist['Close'].rolling(window=20).mean()
-                    hist['SMA50'] = hist['Close'].rolling(window=50).mean()
-                    
-                    fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA20'], line=dict(color='orange', width=1), name='SMA 20'))
-                    fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA50'], line=dict(color='blue', width=1), name='SMA 50'))
-                    
-                    fig.update_layout(title=f'{ticker_input} Price History', xaxis_rangeslider_visible=False, height=600)
-                    st.plotly_chart(fig, use_container_width=True)
+                    if not hist.empty:
+                        fig = go.Figure()
+                        fig.add_trace(go.Candlestick(x=hist.index,
+                                        open=hist['Open'], high=hist['High'],
+                                        low=hist['Low'], close=hist['Close'], name='Price'))
+                        
+                        hist['SMA20'] = hist['Close'].rolling(window=20).mean()
+                        hist['SMA50'] = hist['Close'].rolling(window=50).mean()
+                        
+                        fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA20'], line=dict(color='orange', width=1), name='SMA 20'))
+                        fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA50'], line=dict(color='blue', width=1), name='SMA 50'))
+                        
+                        fig.update_layout(title=f'{ticker_input} Price History', xaxis_rangeslider_visible=False, height=600)
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.warning("No chart data available.")
 
                 # TAB 2: FUNDAMENTALS
                 with tab2:
@@ -195,12 +218,15 @@ elif page == "Stock Analyst Pro":
                     st.subheader("Financial Statements")
                     fin_type = st.selectbox("Select Statement", ["Income Statement", "Balance Sheet", "Cash Flow"])
                     
-                    if fin_type == "Income Statement":
-                        st.dataframe(stock.financials)
-                    elif fin_type == "Balance Sheet":
-                        st.dataframe(stock.balance_sheet)
-                    elif fin_type == "Cash Flow":
-                        st.dataframe(stock.cashflow)
+                    try:
+                        if fin_type == "Income Statement":
+                            st.dataframe(stock.financials)
+                        elif fin_type == "Balance Sheet":
+                            st.dataframe(stock.balance_sheet)
+                        elif fin_type == "Cash Flow":
+                            st.dataframe(stock.cashflow)
+                    except:
+                        st.write("Financial statement data unavailable.")
 
                 # TAB 4: PROFILE & NEWS
                 with tab4:
