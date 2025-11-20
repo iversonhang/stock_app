@@ -68,6 +68,17 @@ def get_financials_data(ticker):
     return stock.financials, stock.balance_sheet, stock.cashflow
 
 @st.cache_data(ttl=300)
+def get_ticker_news(ticker):
+    """
+    Fetches specific news for a ticker.
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        return stock.news
+    except Exception:
+        return []
+
+@st.cache_data(ttl=300)
 def get_market_indices():
     tickers = ['^GSPC', '^DJI', '^IXIC', 'GC=F', 'CL=F']
     data = yf.download(tickers, period="1d", progress=False)['Close']
@@ -229,7 +240,8 @@ elif page == "Stock Analyst Pro":
                         st.write("Price data unavailable")
 
                 # --- TABS FOR ANALYSIS ---
-                tab1, tab2, tab3, tab4 = st.tabs(["Chart", "Fundamentals", "Financials", "Company Profile"])
+                # Added "News" to the list of tabs
+                tab1, tab2, tab3, tab4, tab5 = st.tabs(["Chart", "Fundamentals", "Financials", "Company Profile", "News"])
                 
                 # TAB 1: CHARTING
                 with tab1:
@@ -309,6 +321,53 @@ elif page == "Stock Analyst Pro":
                     st.write(f"**Employees:** {info.get('fullTimeEmployees', 'N/A')}")
                     st.write(f"**Website:** {info.get('website', 'N/A')}")
                     st.write(f"**Headquarters:** {info.get('city', '')}, {info.get('state', '')}")
+                
+                # TAB 5: SPECIFIC STOCK NEWS
+                with tab5:
+                    st.subheader(f"Latest News for {selected_ticker}")
+                    stock_news = get_ticker_news(selected_ticker)
+                    
+                    if not stock_news:
+                        st.info("No recent news found for this stock.")
+                    else:
+                        # Slice to top 20 items
+                        for article in stock_news[:20]:
+                            title = article.get('title')
+                            link = article.get('link')
+                            publisher = article.get('publisher', 'Unknown Source')
+                            publish_time_raw = article.get('providerPublishTime')
+
+                            if not title or not link:
+                                continue
+
+                            with st.container():
+                                col1, col2 = st.columns([1, 4]) # Adjusted ratio for smaller thumbnails
+                                
+                                with col1:
+                                    has_image = False
+                                    if 'thumbnail' in article and 'resolutions' in article['thumbnail']:
+                                        try:
+                                            resolutions = article['thumbnail']['resolutions']
+                                            if resolutions:
+                                                st.image(resolutions[0]['url'], use_column_width=True)
+                                                has_image = True
+                                        except:
+                                            pass 
+                                    
+                                    if not has_image:
+                                        st.write("📰") 
+                                
+                                with col2:
+                                    st.markdown(f"**[{title}]({link})**")
+                                    st.write(f"*{publisher}*")
+                                    
+                                    if publish_time_raw:
+                                        try:
+                                            pub_time = datetime.fromtimestamp(publish_time_raw)
+                                            st.caption(f"{pub_time.strftime('%Y-%m-%d %H:%M')}")
+                                        except:
+                                            pass
+                            st.divider()
 
             else:
                 st.error("Stock data not found. Please check the symbol and try again.")
