@@ -13,8 +13,6 @@ st.set_page_config(
 
 # --- HELPER FUNCTIONS ---
 
-# FIX 1: Split the original function. 
-# We cache the DATA (info dictionary), not the Object.
 @st.cache_data(ttl=300) 
 def get_stock_info(ticker):
     """
@@ -24,20 +22,17 @@ def get_stock_info(ticker):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        # Validation: Ensure it's a valid stock
         if 'symbol' not in info:
             return None
         return info
     except Exception:
         return None
 
-# FIX 2: Create a specific cached function for charts
 @st.cache_data(ttl=300)
 def get_stock_history(ticker, period):
     stock = yf.Ticker(ticker)
     return stock.history(period=period)
 
-# FIX 3: Create a specific cached function for financials
 @st.cache_data(ttl=300)
 def get_financials_data(ticker):
     stock = yf.Ticker(ticker)
@@ -45,7 +40,6 @@ def get_financials_data(ticker):
 
 @st.cache_data(ttl=300)
 def get_market_indices():
-    # S&P 500, Dow Jones, Nasdaq, Gold, Crude Oil
     tickers = ['^GSPC', '^DJI', '^IXIC', 'GC=F', 'CL=F']
     data = yf.download(tickers, period="1d", progress=False)['Close']
     return data
@@ -96,13 +90,33 @@ if page == "Global Headlines":
 
     # 2. News Feed
     st.subheader("Top Financial Stories")
-    try:
-        market_news = yf.Ticker("SPY").news
-        
-        if not market_news:
-            st.info("No news available at the moment.")
-        
-        for article in market_news:
+    
+    # FIX: Aggregate news from multiple sources to ensure the feed isn't empty
+    news_sources = ['SPY', 'QQQ', 'DIA', 'NVDA', 'AAPL', 'MSFT']
+    all_news = []
+    seen_titles = set()
+
+    with st.spinner("Fetching latest headlines..."):
+        for ticker in news_sources:
+            try:
+                # No caching here to ensure news is fresh
+                ticker_news = yf.Ticker(ticker).news
+                for article in ticker_news:
+                    title = article.get('title')
+                    if title and title not in seen_titles:
+                        all_news.append(article)
+                        seen_titles.add(title)
+            except Exception:
+                continue
+
+    # Sort by publication time (newest first)
+    all_news.sort(key=lambda x: x.get('providerPublishTime', 0), reverse=True)
+
+    if not all_news:
+        st.info("No news available at the moment. The data feed might be momentarily down.")
+    else:
+        # Display top 15 unique stories
+        for article in all_news[:15]:
             title = article.get('title')
             link = article.get('link')
             publisher = article.get('publisher', 'Unknown Source')
@@ -140,9 +154,6 @@ if page == "Global Headlines":
                             st.caption("Published: Recently")
                 st.divider()
 
-    except Exception as e:
-        st.warning("News feed is temporarily unavailable.")
-
 elif page == "Stock Analyst Pro":
     st.title("🔎 US Stock Analyzer")
     
@@ -150,7 +161,6 @@ elif page == "Stock Analyst Pro":
     
     if ticker_input:
         with st.spinner(f'Analyzing {ticker_input}...'):
-            # FIX: Call the new cached function that returns a Dictionary (not an object)
             info = get_stock_info(ticker_input)
             
             if info:
@@ -179,7 +189,6 @@ elif page == "Stock Analyst Pro":
                     st.subheader("Technical Analysis")
                     time_period = st.select_slider("Select Time Range", options=['1mo', '3mo', '6mo', '1y', '2y', '5y'], value='1y')
                     
-                    # FIX: Use cached history function
                     hist = get_stock_history(ticker_input, time_period)
                     
                     if not hist.empty:
@@ -233,7 +242,6 @@ elif page == "Stock Analyst Pro":
                     fin_type = st.selectbox("Select Statement", ["Income Statement", "Balance Sheet", "Cash Flow"])
                     
                     try:
-                        # FIX: Call cached financials function
                         financials, balance_sheet, cashflow = get_financials_data(ticker_input)
                         
                         if fin_type == "Income Statement":
