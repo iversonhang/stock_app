@@ -165,8 +165,8 @@ def get_market_scanner_data():
                 info = yf.Ticker(item['Ticker']).info
                 mkt_cap = info.get('marketCap', 0) or 0
                 
-                # Filter > 10 Million
-                if mkt_cap > 10_000_000:
+                # Filter > 100 Million
+                if mkt_cap > 100_000_000:
                     item['MarketCap'] = mkt_cap
                     verified.append(item)
             except:
