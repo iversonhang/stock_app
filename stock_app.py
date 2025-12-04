@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from bs4 import BeautifulSoup
 import google.generativeai as genai
+import json  # Added for JSON parsing
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Wall St. Pulse", page_icon="📈", layout="wide")
@@ -95,63 +96,105 @@ def format_number(num):
 
 def calculate_technicals(df):
     if len(df) < 50: return None 
+    
+    # 1. Moving Averages
     df['SMA50'] = df['Close'].rolling(window=50).mean()
     df['SMA200'] = df['Close'].rolling(window=200).mean()
+    
+    # 2. RSI
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # 3. MACD
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = ema12 - ema26
     df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
+
+    # 4. KDJ Indicator (Stochastic Oscillator)
+    low_min = df['Low'].rolling(window=9).min()
+    high_max = df['High'].rolling(window=9).max()
+    rsv = (df['Close'] - low_min) / (high_max - low_min) * 100
+    df['K'] = rsv.ewm(com=2, adjust=False).mean()
+    df['D'] = df['K'].ewm(com=2, adjust=False).mean()
+    df['J'] = 3 * df['K'] - 2 * df['D']
+    
     return df
 
 def analyze_chart_with_gemini(ticker, df, api_key, model_name):
     if not api_key or df is None: return None
     latest = df.iloc[-1]
-    weekly_df = df.resample('W').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).tail(15)
+    
+    # Resample to MONTHLY Data for macro pattern view
+    monthly_df = df.resample('M').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).tail(24) # Increased to 24 months for better context
+    
     price_sequence = ""
-    for date, row in weekly_df.iterrows():
-        price_sequence += f"Week {date.strftime('%Y-%m-%d')}: H {row['High']:.2f}, L {row['Low']:.2f}, C {row['Close']:.2f}\n"
+    for date, row in monthly_df.iterrows():
+        # Using YYYY-MM-DD format helps the AI pick the exact date string for plotting
+        price_sequence += f"Date {date.strftime('%Y-%m-%d')}: H {row['High']:.2f}, L {row['Low']:.2f}, C {row['Close']:.2f}\n"
 
     tech_data = f"""
-    Ticker: {ticker} | Price: {latest['Close']:.2f} | RSI: {latest['RSI']:.2f} | MACD: {latest['MACD']:.4f}
-    SMA50: {latest['SMA50']:.2f} | SMA200: {latest['SMA200']:.2f}
-    Weekly Prices:
+    Ticker: {ticker} | Latest Price: {latest['Close']:.2f} 
+    Daily Indicators:
+    RSI: {latest['RSI']:.2f} | MACD: {latest['MACD']:.4f}
+    KDJ -> K: {latest['K']:.2f} | D: {latest['D']:.2f} | J: {latest['J']:.2f}
+    
+    Monthly Price Data (Use these dates for coordinates):
     {price_sequence}
     """
 
     try:
         genai.configure(api_key=api_key)
-       # --- FIX: Set Temperature to 0 for Deterministic Results ---
-        generation_config = genai.GenerationConfig(
-            temperature=0.0
-        )
+        
+        # Deterministic output
+        generation_config = genai.GenerationConfig(temperature=0.0, response_mime_type="application/json")
         
         model = genai.GenerativeModel(model_name, generation_config=generation_config)
         
+        # --- JSON PROMPT WITH COORDINATES ---
         prompt = f"""
         Act as a technical analyst for {ticker}.
         {tech_data}
-        Check for: Staircases, Triangles, Flags, Wedges, Double Top/Bottom, Head & Shoulders, Cup & Handle.
-        Output strictly: SIGNAL ||| Pattern Name: [Name] - [Reasoning]
-        Replace SIGNAL with BUY, SELL, or HOLD.
+        
+        TASK:
+        1. Analyze the MONTHLY data for patterns (Staircases, Triangles, Flags, Wedges, Double Top/Bottom, Head & Shoulders, Cup & Handle).
+        2. If MULTIPLE patterns exist, use RSI/KDJ to pick the best one.
+        3. If NO pattern, use RSI/KDJ for the signal (Overbought=SELL, Oversold=BUY).
+        
+        IMPORTANT: DRAW THE PATTERN.
+        Identify up to 2 key trendlines (e.g. Support and Resistance) that define the pattern found.
+        Return the Start and End points (Date and Price) for each line. Ensure the dates strictly match the "Date" field in the data provided.
+
+        Output strictly valid JSON:
+        {{
+            "signal": "BUY",
+            "pattern_name": "Bull Flag",
+            "reasoning": "...",
+            "lines": [
+                {{"label": "Upper Trendline", "x1": "YYYY-MM-DD", "y1": 150.0, "x2": "YYYY-MM-DD", "y2": 160.0}},
+                {{"label": "Lower Trendline", "x1": "YYYY-MM-DD", "y1": 140.0, "x2": "YYYY-MM-DD", "y2": 145.0}}
+            ]
+        }}
         """
+        
         response = model.generate_content(prompt)
         text = response.text.strip()
-        if "|||" in text:
-            parts = text.split("|||")
-            sig = parts[0].strip().upper().replace("VERDICT","").replace("SIGNAL","").replace(":","").strip()
-            if "BUY" in sig: s = "BUY"
-            elif "SELL" in sig: s = "SELL"
-            else: s = "HOLD"
-            return {"signal": s, "reason": parts[1].strip()}
-        else:
-            return {"signal": "HOLD", "reason": text}
+        
+        # Parse JSON
+        try:
+            data = json.loads(text)
+            # Map 'reasoning' to 'reason' for backward compatibility with check() function
+            data['reason'] = data.get('reasoning', '')
+            return data
+        except json.JSONDecodeError:
+            # Fallback if AI fails to return JSON (rare with temp=0)
+            return {"signal": "HOLD", "reason": text, "lines": []}
+            
     except Exception as e:
-        return {"signal": "ERROR", "reason": str(e)}
+        return {"signal": "ERROR", "reason": str(e), "lines": []}
 
 # --- NEWS FUNCTIONS ---
 
@@ -178,11 +221,7 @@ def summarize_news_with_gemini(news_items, api_key, model_name):
     if not api_key: return news_items 
     try:
         genai.configure(api_key=api_key)
-        # --- FIX: Set Temperature to 0 for Deterministic Results ---
-        generation_config = genai.GenerationConfig(
-            temperature=0.0
-        )
-        
+        generation_config = genai.GenerationConfig(temperature=0.0)
         model = genai.GenerativeModel(model_name, generation_config=generation_config)
         prompt = """
         Analyze headlines. 
@@ -226,8 +265,8 @@ else:
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-# --- UPDATED MODEL SELECTION LOGIC ---
-default_model_name = "gemini-flash-latest"
+# --- MODEL SELECTION ---
+default_model_name = "gemini-flash-lite-latest"
 selected_model = default_model_name
 
 if api_key:
@@ -236,16 +275,8 @@ if api_key:
         models = genai.list_models()
         opts = [m.name.replace("models/", "") for m in models if "generateContent" in m.supported_generation_methods]
         opts.sort()
-        
-        # Ensure our preferred default is in the list options (sometimes aliases aren't listed explicitly)
-        if default_model_name not in opts:
-            opts.insert(0, default_model_name)
-            
-        # Find the index of our default model to set the selectbox correctly
-        default_index = 0
-        if default_model_name in opts:
-            default_index = opts.index(default_model_name)
-            
+        if default_model_name not in opts: opts.insert(0, default_model_name)
+        default_index = opts.index(default_model_name) if default_model_name in opts else 0
         if opts: selected_model = st.sidebar.selectbox("Choose AI Model", opts, index=default_index)
     except: pass
 
@@ -293,7 +324,6 @@ if page == "Global Headlines":
                 with st.expander(f"🕒 {dt} | {item['title']}"):
                     c_btn, c_sig, c_empty = st.columns([0.15, 0.2, 0.65])
                     with c_btn:
-                        # --- FIX: USE CALLBACK FOR NAVIGATION ---
                         if tik not in ["MARKET", "NEWS"]:
                             st.button(f"🔍 {tik}", key=f"btn_{index}", on_click=go_to_ticker, args=(tik,))
                         else:
@@ -351,43 +381,38 @@ elif page == "Stock Analyst Pro":
                     hist = get_stock_history(selected_ticker, '2y')
                     df_tech = calculate_technicals(hist.copy())
                     
-                    # Initialize analysis variable
                     analysis = None
 
                     if api_key and df_tech is not None:
                         analysis = analyze_chart_with_gemini(selected_ticker, df_tech, api_key, selected_model)
                         if analysis:
-                            sig = analysis['signal']
+                            sig = analysis.get('signal', 'HOLD')
+                            reason = analysis.get('reason', 'No analysis returned.')
+                            
                             css = "buy" if "BUY" in sig else "sell" if "SELL" in sig else "hold"
                             st.markdown(f'<div class="signal-box {css}">VERDICT: {sig}</div>', unsafe_allow_html=True)
-                            st.info(f"**AI Analysis:** {analysis['reason']}")
+                            st.info(f"**AI Analysis:** {reason}")
                     elif not api_key:
                         st.warning("Enter API Key in sidebar to unlock Pattern Recognition.")
 
                     with st.expander("📘 Reference: Chart Patterns, Signals & Success Rates"):
                             
-                            # --- MATCH CHECKER FUNCTION ---
                             def check(pat):
                                 if analysis and 'reason' in analysis:
                                     reason_text = analysis['reason'].lower()
                                     pat_lower = pat.lower()
-                                    
-                                    # Specific logic to avoid confusing "Head" with "Inv Head"
                                     if "inv" in pat_lower:
-                                        if "inv" in reason_text and pat_lower.replace("inv.", "").replace("inverse", "").strip() in reason_text:
-                                            return " ✅ MATCH"
+                                        if "inv" in reason_text and ("head" in reason_text or "cup" in reason_text): return " ✅ **MATCH**"
                                     elif "head & shoulders" in pat_lower:
-                                        if "head & shoulders" in reason_text and "inv" not in reason_text:
-                                            return " ✅ MATCH"
+                                        if "head & shoulders" in reason_text and "inv" not in reason_text: return " ✅ **MATCH**"
                                     elif "cup" in pat_lower:
-                                         if "cup" in reason_text and "inv" not in reason_text:
-                                              return " ✅ MATCH"
-                                    
-                                    # Fallback simple match
-                                    elif pat_lower in reason_text:
-                                        return " ✅ MATCH"
+                                         if "cup" in reason_text and "inv" not in reason_text: return " ✅ **MATCH**"
+                                    elif "staircase" in pat_lower:
+                                        if "staircase" in reason_text:
+                                            if "ascending" in pat_lower and "ascending" in reason_text: return " ✅ **MATCH**"
+                                            if "descending" in pat_lower and "descending" in reason_text: return " ✅ **MATCH**"
+                                    elif pat_lower in reason_text: return " ✅ **MATCH**"
                                 return ""
-                            # -------------------------------
 
                             st.markdown("### 🏆 Highest Success Patterns")
                             c1, c2, c3 = st.columns(3)
@@ -398,65 +423,61 @@ elif page == "Stock Analyst Pro":
                             st.markdown("---")
                             st.markdown("### 📊 Comprehensive Pattern Guide")
                             
-                            t_rev, t_con, t_tr = st.tabs(["🔄 Reversal (Tops/Bottoms)", "➡️ Continuation (Flags/Wedges)", "📈 Trend (Channels)"])
+                            t_rev, t_con, t_tr = st.tabs(["🔄 Reversal", "➡️ Continuation", "📈 Trend"])
                             
                             with t_rev:
-                                st.markdown("#### Reversal Patterns (Trend Changes)")
-                                st.info("ℹ️ **Strategy:** Wait for the 'Neckline' break. Do not anticipate the pattern before it completes.")
+                                st.markdown("#### Reversal Patterns")
                                 rev_cols = st.columns(2)
                                 with rev_cols[0]:
-                                    st.markdown("##### 🟢 Bullish (Buy Signals)")
+                                    st.markdown("##### 🟢 Bullish (Buy)")
                                     st.markdown(f"""
-                                    | Pattern | Action | Trigger Point |
-                                    | :--- | :--- | :--- |
-                                    | **Inv. Head & Shoulders**{check("Inv. Head")} | **BUY** | Break above Neckline |
-                                    | **Double Bottom**{check("Double Bottom")} | **BUY** | Break above Resistance (W shape) |
-                                    | **Falling Wedge**{check("Falling Wedge")} | **BUY** | Break above Upper Trendline |
+                                    | Pattern | Signal |
+                                    | :--- | :--- |
+                                    | **Inv. Head & Shoulders**{check("Inv")} | **BUY** |
+                                    | **Double Bottom**{check("Double Bottom")} | **BUY** |
+                                    | **Rounded Bottom**{check("Rounded Bottom")} | **BUY** |
+                                    | **Falling Wedge**{check("Falling Wedge")} | **BUY** |
                                     """)
                                 with rev_cols[1]:
-                                    st.markdown("##### 🔴 Bearish (Sell Signals)")
+                                    st.markdown("##### 🔴 Bearish (Sell)")
                                     st.markdown(f"""
-                                    | Pattern | Action | Trigger Point |
-                                    | :--- | :--- | :--- |
-                                    | **Head & Shoulders**{check("Head & Shoulders")} | **SELL** | Break below Neckline |
-                                    | **Double Top**{check("Double Top")} | **SELL** | Break below Support (M shape) |
-                                    | **Rising Wedge**{check("Rising Wedge")} | **SELL** | Break below Lower Trendline |
+                                    | Pattern | Signal |
+                                    | :--- | :--- |
+                                    | **Head & Shoulders**{check("Head & Shoulders")} | **SELL** |
+                                    | **Double Top**{check("Double Top")} | **SELL** |
+                                    | **Rounded Top**{check("Rounded Top")} | **SELL** |
+                                    | **Rising Wedge**{check("Rising Wedge")} | **SELL** |
                                     """)
-                                st.caption("Visual Examples of Bearish Reversals & Breakdowns:")
 
                             with t_con:
-                                st.markdown("#### Continuation Patterns (Mid-Trend Pauses)")
-                                st.info("ℹ️ **Strategy:** These are pauses in an existing trend. Trade in the direction of the prior trend.")
+                                st.markdown("#### Continuation Patterns")
                                 con_cols = st.columns(2)
                                 with con_cols[0]:
-                                    st.markdown("##### 🟢 Bullish Setup")
+                                    st.markdown("##### 🟢 Bullish")
                                     st.markdown(f"""
-                                    | Pattern | Action | Trigger Point |
-                                    | :--- | :--- | :--- |
-                                    | **Bull Flag**{check("Bull Flag")} | **BUY** | Break above the flag's upper slope |
-                                    | **Cup & Handle**{check("Cup & Handle")} | **BUY** | Break above the rim/handle resistance |
-                                    | **Ascending Triangle**{check("Ascending Triangle")} | **BUY** | Break above flat top resistance |
+                                    | Pattern | Signal |
+                                    | :--- | :--- |
+                                    | **Bull Flag**{check("Bull Flag")} | **BUY** |
+                                    | **Cup & Handle**{check("Cup")} | **BUY** |
+                                    | **Asc. Triangle**{check("Ascending Triangle")} | **BUY** |
+                                    | **Sym. Triangle (Bull)**{check("Symmetrical Triangle")} | **BUY** |
                                     """)
                                 with con_cols[1]:
-                                    st.markdown("##### 🔴 Bearish Setup")
+                                    st.markdown("##### 🔴 Bearish")
                                     st.markdown(f"""
-                                    | Pattern | Action | Trigger Point |
-                                    | :--- | :--- | :--- |
-                                    | **Bear Flag**{check("Bear Flag")} | **SELL** | Break below the flag's lower slope |
-                                    | **Inv. Cup & Handle**{check("Inv. Cup")} | **SELL** | Break below the rim support |
-                                    | **Descending Triangle**{check("Descending Triangle")} | **SELL** | Break below flat bottom support |
+                                    | Pattern | Signal |
+                                    | :--- | :--- |
+                                    | **Bear Flag**{check("Bear Flag")} | **SELL** |
+                                    | **Inv. Cup & Handle**{check("Inv. Cup")} | **SELL** |
+                                    | **Desc. Triangle**{check("Descending Triangle")} | **SELL** |
+                                    | **Sym. Triangle (Bear)**{check("Symmetrical Triangle")} | **SELL** |
                                     """)
 
                             with t_tr:
-                                st.markdown("#### Trend Trading (Staircases)")
-                                st.warning("⚠️ **Rule:** The trend is your friend until the bend at the end.")
-                                st.markdown("""
-                                - **Uptrend (Higher Highs, Higher Lows):** - **BUY** at the support trendline (the "floor").
-                                    - **HOLD** while price is between lines.
-                                    - **SELL** if price breaks *below* the support line.
-                                - **Downtrend (Lower Highs, Lower Lows):**
-                                    - **SELL/SHORT** at the resistance trendline (the "ceiling").
-                                    - **Wait** if price is in the middle.
+                                st.markdown("#### Trend Trading")
+                                st.markdown(f"""
+                                - **Ascending Staircase**{check("Ascending Staircase")}: Higher Highs & Higher Lows -> **BUY** dips.
+                                - **Descending Staircase**{check("Descending Staircase")}: Lower Highs & Lower Lows -> **SELL** rallies.
                                 """)
 
                     st.markdown("---")
@@ -468,6 +489,21 @@ elif page == "Stock Analyst Pro":
                         if df_tech is not None:
                             fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['SMA50'], line=dict(color='orange', width=1), name='SMA 50'), row=1, col=1)
                             fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['SMA200'], line=dict(color='blue', width=1), name='SMA 200'), row=1, col=1)
+                        
+                        # --- DRAW PATTERN LINES ---
+                        if analysis and "lines" in analysis:
+                            for line in analysis["lines"]:
+                                try:
+                                    fig.add_shape(
+                                        type="line",
+                                        x0=line['x1'], y0=line['y1'],
+                                        x1=line['x2'], y1=line['y2'],
+                                        line=dict(color="purple", width=3, dash="dot"),
+                                        name=line.get('label', 'Pattern Line')
+                                    )
+                                except: pass
+                        # ---------------------------
+                        
                         fig.add_trace(go.Bar(x=hist.index, y=hist['Volume'], name='Vol'), row=2, col=1)
                         fig.update_layout(height=600, xaxis_rangeslider_visible=False)
                         st.plotly_chart(fig, use_container_width=True)
