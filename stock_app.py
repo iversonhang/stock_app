@@ -4,7 +4,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
+import xml.etree.ElementTree as ET # Standard library for parsing RSS
 
 # --- CONFIGURATION ---
 st.set_page_config(
@@ -29,12 +30,9 @@ st.markdown("""
 
 @st.cache_data(ttl=3600)
 def search_symbol(query):
-    """
-    Searches for a stock symbol using Yahoo Finance's public API.
-    """
     try:
         url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=10&newsCount=0"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         response = requests.get(url, headers=headers)
         data = response.json()
         
@@ -49,22 +47,17 @@ def search_symbol(query):
                         'type': quote.get('quoteType', 'N/A')
                     })
         return results
-    except Exception as e:
+    except Exception:
         return []
 
 @st.cache_data(ttl=300) 
 def get_stock_info(ticker):
-    """
-    Fetches the stock info dictionary. 
-    """
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        if 'symbol' not in info:
-            return None
+        if 'symbol' not in info: return None
         return info
-    except Exception:
-        return None
+    except Exception: return None
 
 @st.cache_data(ttl=300)
 def get_stock_history(ticker, period):
@@ -76,33 +69,51 @@ def get_financials_data(ticker):
     stock = yf.Ticker(ticker)
     return stock.financials, stock.balance_sheet, stock.cashflow
 
-@st.cache_data(ttl=300)
-def get_ticker_news(ticker):
+@st.cache_data(ttl=900) # Cache for 15 mins
+def get_general_headlines():
     """
-    Fetches specific news for a ticker with a fallback method.
+    Fetches the Yahoo Finance Top Stories via RSS Feed.
+    This is more reliable for 'General News' than the API.
     """
     news_items = []
-    
-    # Method 1: yfinance library
+    try:
+        # Yahoo Finance Top Stories RSS
+        url = "https://finance.yahoo.com/news/rssindex"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers)
+        
+        # Parse XML
+        root = ET.fromstring(response.content)
+        
+        # Iterate through items in the RSS feed
+        # Channel -> Item
+        count = 0
+        for item in root.findall('./channel/item'):
+            if count >= 15: break
+            
+            news_item = {
+                'title': item.find('title').text if item.find('title') is not None else 'No Title',
+                'link': item.find('link').text if item.find('link') is not None else '#',
+                'pubDate': item.find('pubDate').text if item.find('pubDate') is not None else '',
+                # RSS often puts the image in media:content or description, skipping for simplicity in RSS view
+                # or extracting simplified text
+            }
+            news_items.append(news_item)
+            count += 1
+            
+    except Exception as e:
+        print(f"RSS Error: {e}")
+        return []
+        
+    return news_items
+
+@st.cache_data(ttl=300)
+def get_ticker_news(ticker):
     try:
         stock = yf.Ticker(ticker)
-        news_items = stock.news
-    except Exception:
-        pass
-        
-    # Method 2: Fallback API
-    if not news_items:
-        try:
-            url = f"https://query2.finance.yahoo.com/v1/finance/search?q={ticker}&quotesCount=0&newsCount=10"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get(url, headers=headers)
-            data = response.json()
-            if 'news' in data:
-                news_items = data['news']
-        except Exception:
-            pass
-            
-    return news_items
+        return stock.news
+    except:
+        return []
 
 def format_number(num):
     if num:
@@ -114,11 +125,9 @@ def format_number(num):
 
 # --- MAIN LAYOUT ---
 
-# Sidebar
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["Global Headlines", "Stock Analyst Pro"])
 st.sidebar.markdown("---")
-st.sidebar.caption("Built with Streamlit & Yahoo Finance")
 
 # --- PAGE 1: GLOBAL HEADLINES ---
 if page == "Global Headlines":
@@ -127,104 +136,75 @@ if page == "Global Headlines":
     # 1. Market Snapshot
     st.subheader("Market Snapshot")
     
-    indices = {
-        "S&P 500": "^GSPC",
-        "Dow Jones": "^DJI",
-        "Nasdaq": "^IXIC",
-        "Gold": "GC=F",
-        "Oil": "CL=F"
-    }
+    # Indices with a Fallback mechanism (Futures -> ETFs)
+    indices = [
+        {"name": "S&P 500", "ticker": "^GSPC", "fallback": "SPY"},
+        {"name": "Dow Jones", "ticker": "^DJI", "fallback": "DIA"},
+        {"name": "Nasdaq", "ticker": "^IXIC", "fallback": "QQQ"},
+        {"name": "Gold", "ticker": "GC=F", "fallback": "GLD"}, # Futures usually GC=F, fallback to GLD ETF
+        {"name": "Oil", "ticker": "CL=F", "fallback": "USO"}   # Futures usually CL=F, fallback to USO ETF
+    ]
     
     cols = st.columns(len(indices))
     
-    # Using individual calls in a loop is often more robust than bulk download 
-    # for these specific indices across different library versions
-    for i, (name, ticker) in enumerate(indices.items()):
-        try:
-            t = yf.Ticker(ticker)
-            # Fetch 5 days to ensure we get at least 2 trading days even over weekends
+    for i, item in enumerate(indices):
+        name = item["name"]
+        ticker = item["ticker"]
+        fallback = item["fallback"]
+        
+        # Try fetching primary ticker (Futures/Index)
+        t = yf.Ticker(ticker)
+        hist = t.history(period="5d")
+        
+        # If primary fails or is empty, try fallback (ETF)
+        if hist.empty:
+            t = yf.Ticker(fallback)
             hist = t.history(period="5d")
-            
+            # Append a small note to the label if using fallback
+            if not hist.empty:
+                name = f"{name} (ETF)"
+        
+        with cols[i]:
             if len(hist) >= 2:
                 current = hist['Close'].iloc[-1]
                 prev = hist['Close'].iloc[-2]
                 delta = current - prev
                 pct_change = (delta / prev) * 100
                 
-                cols[i].metric(
+                st.metric(
                     label=name, 
                     value=f"{current:,.2f}", 
                     delta=f"{delta:,.2f} ({pct_change:.2f}%)"
                 )
             else:
-                cols[i].metric(label=name, value="Data N/A")
-        except Exception:
-            cols[i].metric(label=name, value="Error")
+                st.metric(label=name, value="N/A", delta="No Data")
 
     st.markdown("---")
 
-    # 2. News Feed
-    st.subheader("Top Financial Stories")
+    # 2. News Feed (RSS BASED)
+    st.subheader("Top Financial Stories (Yahoo Finance)")
     
-    # Aggregating news from major market movers to create a "General Feed"
-    news_sources = ['SPY', 'QQQ', 'NVDA', 'AAPL', 'MSFT', 'TSLA']
-    all_news = []
-    seen_titles = set()
-
     with st.spinner("Fetching latest headlines..."):
-        for ticker in news_sources:
-            try:
-                ticker_news = get_ticker_news(ticker)
-                for article in ticker_news:
-                    title = article.get('title')
-                    if title and title not in seen_titles:
-                        all_news.append(article)
-                        seen_titles.add(title)
-            except Exception:
-                continue
-
-    # Sort by time
-    all_news.sort(key=lambda x: x.get('providerPublishTime', 0), reverse=True)
-
-    if not all_news:
-        st.info("No news available at the moment.")
+        general_news = get_general_headlines()
+    
+    if not general_news:
+        st.error("Could not fetch news feed. Please check your internet connection.")
     else:
-        for article in all_news[:15]:
+        for article in general_news:
             title = article.get('title')
             link = article.get('link')
-            publisher = article.get('publisher', 'Unknown Source')
-            publish_time_raw = article.get('providerPublishTime')
-
-            if not title or not link:
-                continue
+            pub_date = article.get('pubDate')
 
             with st.container():
-                col1, col2 = st.columns([1, 4])
+                col1, col2 = st.columns([0.5, 4])
                 
                 with col1:
-                    has_image = False
-                    if 'thumbnail' in article and 'resolutions' in article['thumbnail']:
-                        try:
-                            resolutions = article['thumbnail']['resolutions']
-                            if resolutions:
-                                st.image(resolutions[0]['url'], use_column_width=True)
-                                has_image = True
-                        except:
-                            pass 
-                    
-                    if not has_image:
-                        st.write("📰") 
+                    st.write("📰") 
                 
                 with col2:
                     st.markdown(f"### [{title}]({link})")
-                    st.write(f"**Publisher:** {publisher}")
-                    
-                    if publish_time_raw:
-                        try:
-                            pub_time = datetime.fromtimestamp(publish_time_raw)
-                            st.caption(f"Published: {pub_time.strftime('%Y-%m-%d %H:%M')}")
-                        except:
-                            st.caption("Published: Recently")
+                    if pub_date:
+                        st.caption(f"Published: {pub_date}")
                 st.divider()
 
 # --- PAGE 2: STOCK ANALYST PRO ---
@@ -232,7 +212,6 @@ elif page == "Stock Analyst Pro":
     st.title("🔎 US Stock Analyzer")
     
     search_query = st.text_input("Search by Company Name or Ticker (e.g., 'Apple' or 'AAPL'):")
-    
     selected_ticker = None
 
     if search_query:
@@ -243,7 +222,7 @@ elif page == "Stock Analyst Pro":
                 choice = st.selectbox("Select Company:", options)
                 selected_ticker = choice.split(" - ")[0]
         else:
-            st.warning("No results found. Try checking the spelling.")
+            st.warning("No results found.")
 
     if selected_ticker:
         st.markdown("---")
@@ -251,167 +230,69 @@ elif page == "Stock Analyst Pro":
             info = get_stock_info(selected_ticker)
             
             if info:
-                # --- HEADER ---
+                # HEADER
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col1:
-                    # Logo handling
-                    try:
-                        logo = info.get('logo_url', '')
-                        if logo:
-                            st.image(logo, width=100)
-                    except:
-                        pass
+                    if info.get('logo_url'): st.image(info['logo_url'], width=100)
                 with col2:
                     st.header(f"{info.get('shortName', 'N/A')} ({selected_ticker})")
                     st.write(f"{info.get('sector', 'N/A')} | {info.get('industry', 'N/A')}")
                 with col3:
-                    current_price = info.get('currentPrice', info.get('regularMarketPrice', 0))
-                    prev_close = info.get('previousClose', 0)
-                    if current_price and prev_close:
-                        delta = current_price - prev_close
-                        pct = (delta / prev_close) * 100
-                        st.metric("Current Price", f"${current_price:,.2f}", f"{delta:.2f} ({pct:.2f}%)")
-                    else:
-                        st.write("Price data unavailable")
+                    price = info.get('currentPrice', info.get('regularMarketPrice'))
+                    prev = info.get('previousClose')
+                    if price and prev:
+                        st.metric("Price", f"${price:,.2f}", f"{price-prev:.2f}")
 
-                # --- TABS ---
+                # TABS
                 tab1, tab2, tab3, tab4, tab5 = st.tabs(["Chart", "Fundamentals", "Financials", "Company Profile", "News"])
                 
-                # TAB 1: ADVANCED CHARTING
+                # CHART
                 with tab1:
-                    st.subheader("Technical Analysis")
-                    time_period = st.select_slider("Select Time Range", options=['1mo', '3mo', '6mo', '1y', '2y', '5y'], value='1y')
-                    
-                    hist = get_stock_history(selected_ticker, time_period)
-                    
+                    hist = get_stock_history(selected_ticker, '1y')
                     if not hist.empty:
-                        # Create subplots: Row 1 for Price, Row 2 for Volume
-                        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                                            vertical_spacing=0.05, 
-                                            subplot_titles=(f'{selected_ticker} Price', 'Volume'),
-                                            row_width=[0.2, 0.7]) # 70% height for price
-
-                        # Candlestick
-                        fig.add_trace(go.Candlestick(x=hist.index, 
-                                                    open=hist['Open'], high=hist['High'],
-                                                    low=hist['Low'], close=hist['Close'], 
-                                                    name='Price'), row=1, col=1)
-                        
-                        # Moving Averages
-                        hist['SMA20'] = hist['Close'].rolling(window=20).mean()
-                        hist['SMA50'] = hist['Close'].rolling(window=50).mean()
-                        
-                        fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA20'], 
-                                                line=dict(color='orange', width=1), name='SMA 20'), row=1, col=1)
-                        fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA50'], 
-                                                line=dict(color='blue', width=1), name='SMA 50'), row=1, col=1)
-
-                        # Volume
-                        colors = ['red' if row['Open'] - row['Close'] >= 0 
-                                  else 'green' for index, row in hist.iterrows()]
-                        fig.add_trace(go.Bar(x=hist.index, y=hist['Volume'], 
-                                            marker_color=colors, name='Volume'), row=2, col=1)
-
-                        fig.update_layout(xaxis_rangeslider_visible=False, height=700)
+                        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_width=[0.2, 0.7])
+                        fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='Price'), row=1, col=1)
+                        hist['SMA50'] = hist['Close'].rolling(50).mean()
+                        fig.add_trace(go.Scatter(x=hist.index, y=hist['SMA50'], line=dict(color='blue', width=1), name='SMA 50'), row=1, col=1)
+                        fig.add_trace(go.Bar(x=hist.index, y=hist['Volume'], name='Volume'), row=2, col=1)
+                        fig.update_layout(xaxis_rangeslider_visible=False, height=600)
                         st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.warning("No chart data available.")
+                    else: st.warning("No chart data.")
 
-                # TAB 2: FUNDAMENTALS
+                # FUNDAMENTALS
                 with tab2:
-                    st.subheader("Key Ratios")
-                    f_col1, f_col2, f_col3, f_col4 = st.columns(4)
-                    
-                    with f_col1:
-                        st.write("**Valuation**")
-                        st.write(f"Market Cap: {format_number(info.get('marketCap'))}")
-                        st.write(f"Trailing P/E: {info.get('trailingPE', 'N/A')}")
-                        st.write(f"Forward P/E: {info.get('forwardPE', 'N/A')}")
-                        st.write(f"PEG Ratio: {info.get('pegRatio', 'N/A')}")
-                        
-                    with f_col2:
-                        st.write("**Profitability**")
-                        st.write(f"Profit Margins: {info.get('profitMargins', 0)*100:.2f}%")
-                        st.write(f"ROA: {info.get('returnOnAssets', 0)*100:.2f}%")
-                        st.write(f"ROE: {info.get('returnOnEquity', 0)*100:.2f}%")
-                        
-                    with f_col3:
-                        st.write("**Risk/Volatility**")
-                        st.write(f"Beta: {info.get('beta', 'N/A')}")
-                        st.write(f"52 Week High: {info.get('fiftyTwoWeekHigh', 'N/A')}")
-                        st.write(f"52 Week Low: {info.get('fiftyTwoWeekLow', 'N/A')}")
+                    c1, c2, c3 = st.columns(3)
+                    with c1: 
+                        st.metric("Market Cap", format_number(info.get('marketCap')))
+                        st.metric("Beta", info.get('beta', 'N/A'))
+                    with c2: 
+                        st.metric("PE Ratio", info.get('trailingPE', 'N/A'))
+                        st.metric("EPS", info.get('trailingEps', 'N/A'))
+                    with c3:
+                        st.metric("Dividend Yield", f"{info.get('dividendYield', 0)*100:.2f}%")
+                        st.metric("52W High", info.get('fiftyTwoWeekHigh', 'N/A'))
 
-                    with f_col4:
-                        st.write("**Dividends**")
-                        st.write(f"Dividend Rate: {info.get('dividendRate', 'N/A')}")
-                        st.write(f"Dividend Yield: {info.get('dividendYield', 0)*100:.2f}%")
-
-                # TAB 3: FINANCIALS
+                # FINANCIALS
                 with tab3:
-                    st.subheader("Financial Statements")
-                    fin_type = st.selectbox("Select Statement", ["Income Statement", "Balance Sheet", "Cash Flow"])
-                    
-                    try:
-                        financials, balance_sheet, cashflow = get_financials_data(selected_ticker)
-                        
-                        if fin_type == "Income Statement":
-                            st.dataframe(financials.fillna("-"))
-                        elif fin_type == "Balance Sheet":
-                            st.dataframe(balance_sheet.fillna("-"))
-                        elif fin_type == "Cash Flow":
-                            st.dataframe(cashflow.fillna("-"))
-                    except:
-                        st.write("Financial statement data unavailable.")
+                    fin_type = st.selectbox("Statement", ["Income", "Balance Sheet", "Cash Flow"])
+                    f, b, c = get_financials_data(selected_ticker)
+                    if fin_type=="Income": st.dataframe(f)
+                    elif fin_type=="Balance Sheet": st.dataframe(b)
+                    else: st.dataframe(c)
 
-                # TAB 4: PROFILE
+                # PROFILE
                 with tab4:
-                    st.subheader("Business Summary")
-                    st.write(info.get('longBusinessSummary', 'No summary available.'))
-                    st.markdown("---")
-                    col_p1, col_p2 = st.columns(2)
-                    with col_p1:
-                        st.write(f"**Employees:** {info.get('fullTimeEmployees', 'N/A')}")
-                        st.write(f"**Headquarters:** {info.get('city', '')}, {info.get('state', '')}")
-                    with col_p2:
-                        st.write(f"**Website:** {info.get('website', 'N/A')}")
-                
-                # TAB 5: SPECIFIC NEWS
+                    st.write(info.get('longBusinessSummary', ''))
+                    st.write(f"**Website:** {info.get('website', 'N/A')}")
+
+                # NEWS
                 with tab5:
-                    st.subheader(f"Latest News for {selected_ticker}")
-                    stock_news = get_ticker_news(selected_ticker)
-                    
-                    if not stock_news:
-                        st.info(f"No recent news found for {selected_ticker}.")
-                    else:
-                        for article in stock_news[:15]:
-                            title = article.get('title')
-                            link = article.get('link')
-                            publisher = article.get('publisher', 'Unknown Source')
-                            publish_time_raw = article.get('providerPublishTime')
-
-                            if not title or not link: continue
-
-                            with st.container():
-                                col1, col2 = st.columns([1, 4])
-                                with col1:
-                                    has_image = False
-                                    if 'thumbnail' in article and 'resolutions' in article['thumbnail']:
-                                        try:
-                                            resolutions = article['thumbnail']['resolutions']
-                                            if resolutions:
-                                                st.image(resolutions[0]['url'], use_column_width=True)
-                                                has_image = True
-                                        except: pass
-                                    if not has_image: st.write("📰")
-                                with col2:
-                                    st.markdown(f"**[{title}]({link})**")
-                                    st.write(f"*{publisher}*")
-                                    if publish_time_raw:
-                                        try:
-                                            pub_time = datetime.fromtimestamp(publish_time_raw)
-                                            st.caption(f"{pub_time.strftime('%Y-%m-%d %H:%M')}")
-                                        except: pass
+                    news = get_ticker_news(selected_ticker)
+                    if news:
+                        for n in news[:10]:
+                            st.markdown(f"[{n.get('title')}]({n.get('link')})")
+                            st.caption(f"Source: {n.get('publisher')}")
                             st.divider()
-
+                    else: st.info("No specific news found.")
             else:
-                st.error("Stock data not found. Please check the symbol and try again.")
+                st.error("Error loading data.")
