@@ -202,7 +202,6 @@ def summarize_news_with_gemini(news_items, api_key, model_name):
     return news_items
 
 # --- SIDEBAR ---
-# --- SIDEBAR ---
 st.sidebar.title("Configuration")
 
 # Check if the key exists in Streamlit Secrets
@@ -216,14 +215,27 @@ else:
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-selected_model = "gemini-flash-lite-latest" 
+# --- UPDATED MODEL SELECTION LOGIC ---
+default_model_name = "gemini-flash-lite-latest"
+selected_model = default_model_name
+
 if api_key:
     try:
         genai.configure(api_key=api_key)
         models = genai.list_models()
         opts = [m.name.replace("models/", "") for m in models if "generateContent" in m.supported_generation_methods]
         opts.sort()
-        if opts: selected_model = st.sidebar.selectbox("Choose AI Model", opts, index=0)
+        
+        # Ensure our preferred default is in the list options (sometimes aliases aren't listed explicitly)
+        if default_model_name not in opts:
+            opts.insert(0, default_model_name)
+            
+        # Find the index of our default model to set the selectbox correctly
+        default_index = 0
+        if default_model_name in opts:
+            default_index = opts.index(default_model_name)
+            
+        if opts: selected_model = st.sidebar.selectbox("Choose AI Model", opts, index=default_index)
     except: pass
 
 # --- MAIN LAYOUT ---
@@ -276,7 +288,7 @@ if page == "Global Headlines":
                         else:
                             st.write(f"**{tik}**")
                     with c_sig:
-                         st.markdown(f"<span style='color:{col}; font-weight:bold; font-size:1.1em;'>{sig}</span>", unsafe_allow_html=True)
+                          st.markdown(f"<span style='color:{col}; font-weight:bold; font-size:1.1em;'>{sig}</span>", unsafe_allow_html=True)
                     st.write(item.get('summary', ''))
                     st.markdown(f"[Read More]({item['link']})")
 
@@ -344,6 +356,10 @@ elif page == "Stock Analyst Pro":
                             c1.metric("Inv. Head & Shoulders", "89% Success", "Bullish Reversal")
                             c2.metric("Double Bottom", "88% Success", "Bullish Reversal")
                             c3.metric("Desc. Triangle", "87% Success", "Bearish Breakout")
+                            
+
+[Image of bullish and bearish stock chart patterns]
+
                             st.markdown("---")
                             st.markdown("### 📊 Comprehensive Pattern Guide")
                             t_tr, t_rev, t_con = st.tabs(["Trend", "Reversal", "Continuation"])
