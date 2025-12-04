@@ -143,22 +143,26 @@ def get_market_scanner_data():
                 })
         except: continue
             
-    # 3. FILTER LOGIC (> 10 Million)
+    # 3. FILTER LOGIC (Strict RSI + Market Cap)
     
-    def get_verified_list(candidates, ascending=True):
-        # Sort by RSI first
-        sorted_list = sorted(candidates, key=lambda x: x['RSI'], reverse=not ascending)
+    def get_verified_list(candidates, is_oversold):
+        # Sort by RSI
+        sorted_list = sorted(candidates, key=lambda x: x['RSI'], reverse=not is_oversold)
         
         verified = []
         for item in sorted_list:
             if len(verified) >= 10: break 
+            
+            # --- STRICT RSI FILTER ---
+            if is_oversold and item['RSI'] >= 30: continue # Must be < 30
+            if not is_oversold and item['RSI'] <= 70: continue # Must be > 70
             
             try:
                 # Fetch Market Cap
                 info = yf.Ticker(item['Ticker']).info
                 mkt_cap = info.get('marketCap', 0) or 0
                 
-                # Filter > 10 Million
+                # Market Cap > 10 Million
                 if mkt_cap > 10_000_000:
                     item['MarketCap'] = mkt_cap
                     verified.append(item)
@@ -166,8 +170,9 @@ def get_market_scanner_data():
                 continue
         return pd.DataFrame(verified)
 
-    oversold_df = get_verified_list(rsi_candidates, ascending=True)
-    overbought_df = get_verified_list(rsi_candidates, ascending=False)
+    # Pass True for Oversold (lowest RSI), False for Overbought (highest RSI)
+    oversold_df = get_verified_list(rsi_candidates, is_oversold=True)
+    overbought_df = get_verified_list(rsi_candidates, is_oversold=False)
     
     return oversold_df, overbought_df
 
@@ -323,7 +328,7 @@ else:
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-default_model_name = "gemini-flash-latest"
+default_model_name = "gemini-flash-lite-latest"
 selected_model = default_model_name
 
 if api_key:
