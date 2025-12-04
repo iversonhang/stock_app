@@ -10,6 +10,7 @@ from email.utils import parsedate_to_datetime
 from bs4 import BeautifulSoup
 import google.generativeai as genai
 import json
+import io # Added for robust table parsing
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Wall St. Pulse", page_icon="📈", layout="wide")
@@ -98,40 +99,47 @@ def format_number(num):
 @st.cache_data(ttl=3600)
 def get_sp500_tickers():
     try:
+        # --- FIX: USE REQUESTS WITH HEADERS TO BYPASS WIKIPEDIA BLOCK ---
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-        tables = pd.read_html(url)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        
+        response = requests.get(url, headers=headers)
+        # Use io.StringIO to avoid parser warnings
+        tables = pd.read_html(io.StringIO(response.text))
         df = tables[0]
-        # Fix tickers: replace '.' with '-' (e.g. BRK.B -> BRK-B)
+        
+        # Replace dot with hyphen for Yahoo Finance compatibility (e.g. BRK.B -> BRK-B)
         tickers = df['Symbol'].apply(lambda x: x.replace('.', '-')).tolist()
         return tickers
-    except:
-        # Fallback list if Wiki fails
+    except Exception as e:
+        # Debugging: Print error to console if running locally
+        print(f"Error fetching S&P 500 list: {e}")
+        # Fallback list if scrape completely fails
         return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK-B', 'V', 'JNJ', 'JPM', 'XOM']
 
 @st.cache_data(ttl=3600)
 def get_market_scanner_data():
     tickers = get_sp500_tickers()
     
-    # 1. BATCH DOWNLOAD
-    # Using 'threads=True' for speed
-    data = yf.download(tickers, period="3mo", interval="1d", group_by='ticker', threads=True)
+    # 1. BATCH DOWNLOAD (Fast)
+    data = yf.download(tickers, period="6mo", interval="1d", group_by='ticker', threads=True)
     
     rsi_candidates = []
     
     # 2. CALCULATE RSI
     for ticker in tickers:
         try:
-            # Handle MultiIndex
+            # Handle MultiIndex DataFrame from yfinance
             if isinstance(data.columns, pd.MultiIndex):
                 if ticker in data.columns.get_level_values(0):
                     df = data[ticker].copy()
                 else: continue
             else:
-                df = data # Should not happen with multiple tickers
+                df = data
             
             if len(df) < 15: continue
             
-            # RSI Calc
+            # RSI Calculation
             delta = df['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -158,15 +166,16 @@ def get_market_scanner_data():
         for item in sorted_list:
             if len(verified) >= 10: break 
             
-            # --- STRICT RSI FILTER ---
-            if is_oversold and item['RSI'] >= 30: continue # Must be < 30
-            if not is_oversold and item['RSI'] <= 70: continue # Must be > 70
+            # Strict RSI Filters
+            if is_oversold and item['RSI'] >= 30: continue
+            if not is_oversold and item['RSI'] <= 70: continue
             
             try:
+                # Fetch Market Cap (Lazy Loading)
                 info = yf.Ticker(item['Ticker']).info
                 mkt_cap = info.get('marketCap', 0) or 0
                 
-                # --- FILTER > 10 Million ---
+                # Filter > 10 Million
                 if mkt_cap > 10_000_000:
                     item['MarketCap'] = mkt_cap
                     verified.append(item)
@@ -331,7 +340,7 @@ else:
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-default_model_name = "gemini-flash-latest"
+default_model_name = "gemini-flash-lite-latest"
 selected_model = default_model_name
 
 if api_key:
@@ -402,11 +411,11 @@ elif page == "Market Scanner":
     st.title("⚡ S&P 500 Market Scanner")
     st.markdown("Scanning stocks for extreme RSI conditions (Filtered by Market Cap > $10M)...")
     
-    # --- REFRESH BUTTON LOGIC ---
+    # --- REFRESH BUTTON ---
     if st.button("🔄 Refresh Data"):
         st.cache_data.clear()
         st.rerun()
-    # ----------------------------
+    # ----------------------
 
     with st.spinner("Batch processing S&P 500 data... (this runs once per hour)"):
         oversold_df, overbought_df, scanned_count = get_market_scanner_data()
@@ -543,6 +552,10 @@ elif page == "Stock Analyst Pro":
                             
                             with t_rev:
                                 st.markdown("#### Reversal Patterns")
+                                
+
+[Image of head and shoulders stock pattern diagram]
+
                                 rev_cols = st.columns(2)
                                 with rev_cols[0]:
                                     st.markdown("##### 🟢 Bullish (Buy)")
@@ -567,6 +580,10 @@ elif page == "Stock Analyst Pro":
 
                             with t_con:
                                 st.markdown("#### Continuation Patterns")
+                                
+
+[Image of bullish flag chart pattern]
+
                                 con_cols = st.columns(2)
                                 with con_cols[0]:
                                     st.markdown("##### 🟢 Bullish")
