@@ -95,17 +95,38 @@ def format_number(num):
 
 def calculate_technicals(df):
     if len(df) < 50: return None 
+    
+    # 1. Moving Averages
     df['SMA50'] = df['Close'].rolling(window=50).mean()
     df['SMA200'] = df['Close'].rolling(window=200).mean()
+    
+    # 2. RSI
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # 3. MACD
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = ema12 - ema26
     df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
+
+    # 4. KDJ Indicator (Stochastic Oscillator)
+    # KDJ requires the Lowest Low and Highest High over a 9-day window
+    low_min = df['Low'].rolling(window=9).min()
+    high_max = df['High'].rolling(window=9).max()
+    
+    # RSV (Raw Stochastic Value)
+    rsv = (df['Close'] - low_min) / (high_max - low_min) * 100
+    
+    # Calculate K, D, J
+    # Using ewm(com=2) approximates the standard SMA(3) smoothing used in KDJ
+    df['K'] = rsv.ewm(com=2, adjust=False).mean()
+    df['D'] = df['K'].ewm(com=2, adjust=False).mean()
+    df['J'] = 3 * df['K'] - 2 * df['D']
+    
     return df
 
 def analyze_chart_with_gemini(ticker, df, api_key, model_name):
@@ -116,8 +137,11 @@ def analyze_chart_with_gemini(ticker, df, api_key, model_name):
     for date, row in weekly_df.iterrows():
         price_sequence += f"Week {date.strftime('%Y-%m-%d')}: H {row['High']:.2f}, L {row['Low']:.2f}, C {row['Close']:.2f}\n"
 
+    # Added K, D, J to the technical data string passed to AI
     tech_data = f"""
-    Ticker: {ticker} | Price: {latest['Close']:.2f} | RSI: {latest['RSI']:.2f} | MACD: {latest['MACD']:.4f}
+    Ticker: {ticker} | Price: {latest['Close']:.2f} 
+    RSI: {latest['RSI']:.2f} | MACD: {latest['MACD']:.4f}
+    KDJ -> K: {latest['K']:.2f} | D: {latest['D']:.2f} | J: {latest['J']:.2f}
     SMA50: {latest['SMA50']:.2f} | SMA200: {latest['SMA200']:.2f}
     Weekly Prices:
     {price_sequence}
@@ -127,21 +151,29 @@ def analyze_chart_with_gemini(ticker, df, api_key, model_name):
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
         
-        # --- UPDATED PROMPT WITH SPECIFIC PATTERN LIST ---
+        # --- PROMPT WITH FALLBACK LOGIC ---
         prompt = f"""
         Act as a technical analyst for {ticker}.
         {tech_data}
-        Analyze the price data specifically for these patterns:
-        1. Ascending or Descending Staircases
-        2. Ascending, Descending, or Symmetrical Triangles
-        3. Flags (Bull/Bear)
-        4. Wedges (Falling/Rising)
-        5. Double Top or Double Bottom
-        6. Head and Shoulders (or Inverse)
-        7. Rounded Top or Rounded Bottom
-        8. Cup and Handle (or Inverse)
         
-        Output strictly: SIGNAL ||| Pattern Name: [Name] - [Reasoning]
+        TASK:
+        1. FIRST, check for specific chart patterns in the price data:
+           - Staircases (Ascending/Descending)
+           - Triangles (Ascending/Descending/Symmetrical)
+           - Flags or Wedges
+           - Double Top/Bottom
+           - Head & Shoulders (Regular/Inverse)
+           - Rounded Top/Bottom
+           - Cup & Handle
+
+        2. SECOND, IF NO CLEAR PATTERN IS FOUND, use RSI and KDJ for a verdict:
+           - Overbought (SELL): RSI > 70 OR (K > 80 AND J > 100)
+           - Oversold (BUY): RSI < 30 OR (K < 20 AND J < 0)
+           - Neutral (HOLD): If indicators are in the middle.
+
+        Output strictly in this format: 
+        SIGNAL ||| Pattern Name OR "Indicator Analysis" - [Reasoning]
+        
         Replace SIGNAL with BUY, SELL, or HOLD.
         """
         
@@ -228,7 +260,7 @@ st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
 # --- MODEL SELECTION ---
-default_model_name = "gemini-flash-lite-latest"
+default_model_name = "gemini-flash-latest"
 selected_model = default_model_name
 
 if api_key:
@@ -378,7 +410,6 @@ elif page == "Stock Analyst Pro":
                                     # Specific Logic for Staircases
                                     elif "staircase" in pat_lower:
                                         if "staircase" in reason_text:
-                                            # Differentiate Ascending vs Descending if specifically asked
                                             if "ascending" in pat_lower and "ascending" in reason_text: return " ✅ **MATCH**"
                                             if "descending" in pat_lower and "descending" in reason_text: return " ✅ **MATCH**"
                                     
