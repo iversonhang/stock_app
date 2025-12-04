@@ -165,8 +165,8 @@ def get_market_scanner_data():
                 info = yf.Ticker(item['Ticker']).info
                 mkt_cap = info.get('marketCap', 0) or 0
                 
-                # Filter > 100 Million
-                if mkt_cap > 100_000_000:
+                # Filter > 10 Million
+                if mkt_cap > 10_000_000:
                     item['MarketCap'] = mkt_cap
                     verified.append(item)
             except:
@@ -330,7 +330,7 @@ else:
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-default_model_name = "gemini-flash-latest"
+default_model_name = "gemini-flash-lite-latest"
 selected_model = default_model_name
 
 if api_key:
@@ -399,7 +399,7 @@ if page == "Global Headlines":
 
 elif page == "Market Scanner":
     st.title("⚡ S&P 500 Market Scanner")
-    st.markdown("Scanning stocks for extreme RSI conditions (Filtered by Market Cap > $100M)...")
+    st.markdown("Scanning stocks for extreme RSI conditions (Filtered by Market Cap > $10M)...")
     
     # --- REFRESH BUTTON ---
     if st.button("🔄 Refresh Data"):
@@ -636,6 +636,31 @@ elif page == "Stock Analyst Pro":
                         f, _, _ = get_financials_data(selected_ticker)
                         st.dataframe(f)
 
+                    # --- UPDATED NEWS TAB WITH SEARCH ---
                     with tabs[3]:
+                        st.subheader(f"📰 News Search & Filter")
+                        search_term = st.text_input("Filter headlines by keyword:", placeholder="e.g. Earnings, CEO, Analyst...")
+                        
                         news = get_ticker_news(selected_ticker)
-                        for n in news[:5]: st.write(f"- [{n.get('title')}]({n.get('link')})")
+                        
+                        if news:
+                            if search_term:
+                                filtered_news = [n for n in news if search_term.lower() in n.get('title', '').lower()]
+                            else:
+                                filtered_news = news[:10]
+                            
+                            if filtered_news:
+                                for n in filtered_news:
+                                    title = n.get('title', 'No Title')
+                                    url = n.get('link', '#')
+                                    publisher = n.get('publisher', 'Unknown')
+                                    ts = n.get('providerPublishTime', None)
+                                    time_str = f" • {datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M')}" if ts else ""
+                                    
+                                    st.markdown(f"**[{title}]({url})**")
+                                    st.caption(f"{publisher}{time_str}")
+                                    st.divider()
+                            else:
+                                st.warning(f"No news found matching '{search_term}'.")
+                        else:
+                            st.info("No recent news found for this ticker.")
