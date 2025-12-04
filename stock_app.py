@@ -216,7 +216,7 @@ else:
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-selected_model = "gemini-pro-latest" 
+selected_model = "gemini-flash-lite-latest" 
 if api_key:
     try:
         genai.configure(api_key=api_key)
