@@ -412,18 +412,8 @@ elif page == "Stock Analyst Pro":
                                     | **Rising Wedge**{check("Rising Wedge")} | **SELL** | Break below Lower Trendline |
                                     """)
                                 st.caption("Visual Examples of Bearish Reversals & Breakdowns:")
-                                
 
-
-
-# Option A: If you have the image file saved locally
-st.image("path/to/chart_patterns.png", caption="Bullish and Bearish Chart Patterns")
-
-# Option B: If you want to use a URL (example)
-st.image("https://example.com/stock-patterns.jpg", caption="Bullish and Bearish Chart Patterns")
-
-
-                            with t_con:
+                        with t_con:
                                 st.markdown("#### Continuation Patterns (Mid-Trend Pauses)")
                                 st.info("ℹ️ **Strategy:** These are pauses in an existing trend. Trade in the direction of the prior trend.")
                                 con_cols = st.columns(2)
