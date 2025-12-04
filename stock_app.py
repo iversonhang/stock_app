@@ -10,7 +10,7 @@ from email.utils import parsedate_to_datetime
 from bs4 import BeautifulSoup
 import google.generativeai as genai
 import json
-import io # Added for robust table parsing
+import io 
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Wall St. Pulse", page_icon="📈", layout="wide")
@@ -99,27 +99,22 @@ def format_number(num):
 @st.cache_data(ttl=3600)
 def get_sp500_tickers():
     try:
-        # Use requests with headers to bypass Wikipedia block
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
         
         response = requests.get(url, headers=headers)
-        # Use io.StringIO to avoid parser warnings
         tables = pd.read_html(io.StringIO(response.text))
         df = tables[0]
-        
-        # Replace dot with hyphen for Yahoo Finance compatibility (e.g. BRK.B -> BRK-B)
         tickers = df['Symbol'].apply(lambda x: x.replace('.', '-')).tolist()
         return tickers
     except Exception as e:
-        # Fallback list if scrape completely fails
         return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK-B', 'V', 'JNJ', 'JPM', 'XOM']
 
 @st.cache_data(ttl=3600)
 def get_market_scanner_data():
     tickers = get_sp500_tickers()
     
-    # 1. BATCH DOWNLOAD (Fast)
+    # 1. BATCH DOWNLOAD
     data = yf.download(tickers, period="6mo", interval="1d", group_by='ticker', threads=True)
     
     rsi_candidates = []
@@ -127,7 +122,6 @@ def get_market_scanner_data():
     # 2. CALCULATE RSI
     for ticker in tickers:
         try:
-            # Handle MultiIndex DataFrame from yfinance
             if isinstance(data.columns, pd.MultiIndex):
                 if ticker in data.columns.get_level_values(0):
                     df = data[ticker].copy()
@@ -137,7 +131,6 @@ def get_market_scanner_data():
             
             if len(df) < 15: continue
             
-            # RSI Calculation
             delta = df['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -157,23 +150,17 @@ def get_market_scanner_data():
             
     # 3. FILTER LOGIC
     def get_verified_list(candidates, is_oversold):
-        # Sort by RSI
         sorted_list = sorted(candidates, key=lambda x: x['RSI'], reverse=not is_oversold)
-        
         verified = []
         for item in sorted_list:
             if len(verified) >= 10: break 
             
-            # Strict RSI Filters
             if is_oversold and item['RSI'] >= 30: continue
             if not is_oversold and item['RSI'] <= 70: continue
             
             try:
-                # Fetch Market Cap (Lazy Loading)
                 info = yf.Ticker(item['Ticker']).info
                 mkt_cap = info.get('marketCap', 0) or 0
-                
-                # Filter > 10 Million
                 if mkt_cap > 10_000_000:
                     item['MarketCap'] = mkt_cap
                     verified.append(item)
@@ -550,10 +537,7 @@ elif page == "Stock Analyst Pro":
                             
                             with t_rev:
                                 st.markdown("#### Reversal Patterns")
-                                
-
-[Image of head and shoulders stock pattern diagram]
-
+                                # Removed placeholder
                                 rev_cols = st.columns(2)
                                 with rev_cols[0]:
                                     st.markdown("##### 🟢 Bullish (Buy)")
@@ -578,10 +562,7 @@ elif page == "Stock Analyst Pro":
 
                             with t_con:
                                 st.markdown("#### Continuation Patterns")
-                                
-
-[Image of bullish flag chart pattern]
-
+                                # Removed placeholder
                                 con_cols = st.columns(2)
                                 with con_cols[0]:
                                     st.markdown("##### 🟢 Bullish")
