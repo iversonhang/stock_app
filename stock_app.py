@@ -202,8 +202,17 @@ def summarize_news_with_gemini(news_items, api_key, model_name):
     return news_items
 
 # --- SIDEBAR ---
+# --- SIDEBAR ---
 st.sidebar.title("Configuration")
-api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
+
+# Check if the key exists in Streamlit Secrets
+if "GEMINI_API_KEY" in st.secrets:
+    api_key = st.secrets["GEMINI_API_KEY"]
+    st.sidebar.success("✅ API Key loaded from Secrets")
+else:
+    # Fallback to manual input
+    api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
+    
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
