@@ -31,11 +31,6 @@ st.markdown("""
     .buy { background-color: #e6fffa; color: #00bfa5; border: 1px solid #00bfa5; }
     .sell { background-color: #fff5f5; color: #ff5252; border: 1px solid #ff5252; }
     .hold { background-color: #f0f2f6; color: #555; border: 1px solid #ccc; }
-    /* Tag Styles */
-    .tag-buy { background-color: #00bfa5; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
-    .tag-sell { background-color: #ff5252; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
-    .tag-hold { background-color: #777; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
-    
     div[data-testid="stButton"] button {
         padding: 0.25rem 0.75rem;
         font-size: 0.8rem;
@@ -268,26 +263,60 @@ def analyze_chart_with_gemini_cached(ticker, _df_monthly_summary, _latest_indica
     except Exception as e:
         return {"signal": "ERROR", "reason": str(e), "lines": []}
 
-# --- HELPER TO GET MINI ANALYSIS FOR SCANNER ---
-def get_quick_analysis(ticker, api_key, model_name):
-    # This fetches just enough data to call the AI function
+# --- NEWS FUNCTIONS ---
+
+def fetch_rss_feed():
+    items = []
     try:
-        hist = yf.Ticker(ticker).history(period='2y')
-        df = calculate_technicals(hist)
-        if df is None: return None
-        
-        latest = df.iloc[-1]
-        monthly_df = df.resample('M').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).tail(24)
-        
-        monthly_str = ""
-        for date, row in monthly_df.iterrows():
-            monthly_str += f"Date {date.strftime('%Y-%m-%d')}: H {row['High']:.2f}, L {row['Low']:.2f}, C {row['Close']:.2f}\n"
-        
-        indicators_str = f"Latest Price: {latest['Close']:.2f}\nRSI: {latest['RSI']:.2f} | MACD: {latest['MACD']:.4f}\nKDJ -> K: {latest['K']:.2f} | D: {latest['D']:.2f} | J: {latest['J']:.2f}"
-        
-        return analyze_chart_with_gemini_cached(ticker, monthly_str, indicators_str, api_key, model_name)
-    except:
-        return None
+        url = "https://finance.yahoo.com/news/rssindex"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=5)
+        root = ET.fromstring(response.content)
+        for item in root.findall('./channel/item')[:10]: 
+            title = item.find('title').text
+            link = item.find('link').text
+            pub_date = item.find('pubDate').text
+            description = item.find('description').text if item.find('description') is not None else ""
+            if description:
+                soup = BeautifulSoup(description, 'html.parser')
+                description = soup.get_text().strip()
+            items.append({'title': title, 'link': link, 'pub_date': pub_date, 'raw_desc': description})
+    except: return []
+    return items
+
+def summarize_news_with_gemini(news_items, api_key, model_name):
+    if not api_key: return news_items 
+    try:
+        genai.configure(api_key=api_key)
+        generation_config = genai.GenerationConfig(temperature=0.0)
+        model = genai.GenerativeModel(model_name, generation_config=generation_config)
+        prompt = """
+        Analyze headlines. 
+        1. Summarize in 2 sentences. 
+        2. Assign signal (BUY, SELL, HOLD). 
+        3. Identify the primary Ticker (e.g. AAPL). If general/market-wide, use "MARKET".
+        Format: Summary %% SIGNAL %% TICKER
+        Separator: |||
+        """
+        input_text = ""
+        for item in news_items: input_text += f"Head: {item['title']}\nCtx: {item['raw_desc']}\n"
+        response = model.generate_content(prompt + "\n\n" + input_text)
+        res_list = response.text.split('|||')
+        for i, item in enumerate(news_items):
+            if i < len(res_list):
+                txt = res_list[i].strip()
+                if "%%" in txt:
+                    parts = txt.split("%%")
+                    item['summary'] = parts[0].strip()
+                    item['signal'] = parts[1].strip().upper()
+                    if len(parts) > 2: item['ticker'] = parts[2].strip().upper()
+                    else: item['ticker'] = "MARKET"
+                else:
+                    item['summary'] = txt
+                    item['signal'] = "HOLD"
+                    item['ticker'] = "NEWS"
+    except: pass
+    return news_items
 
 # --- SIDEBAR ---
 st.sidebar.title("Configuration")
@@ -301,7 +330,7 @@ else:
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-default_model_name = "gemini-flash-latest"
+default_model_name = "gemini-flash-lite-latest"
 selected_model = default_model_name
 
 if api_key:
@@ -389,21 +418,10 @@ elif page == "Market Scanner":
         st.caption("RSI < 30 indicates the stock may be undervalued.")
         if not oversold_df.empty:
             for i, row in oversold_df.iterrows():
-                # --- AI VERDICT TAG GENERATION ---
-                ai_tag = ""
-                if api_key:
-                    res = get_quick_analysis(row['Ticker'], api_key, selected_model)
-                    if res:
-                        s = res.get('signal', 'HOLD')
-                        css_class = "tag-buy" if "BUY" in s else "tag-sell" if "SELL" in s else "tag-hold"
-                        ai_tag = f'<span class="{css_class}">{s}</span>'
-                # ---------------------------------
-
                 with st.expander(f"**{row['Ticker']}** | RSI: {row['RSI']:.1f}"):
-                    st.markdown(f"**AI Verdict:** {ai_tag}", unsafe_allow_html=True)
                     st.write(f"Price: ${row['Price']:.2f}")
                     st.write(f"Market Cap: {format_number(row.get('MarketCap', 0))}")
-                    st.button(f"Detailed Analysis {row['Ticker']}", key=f"os_{i}", on_click=go_to_ticker, args=(row['Ticker'],))
+                    st.button(f"Analyze {row['Ticker']}", key=f"os_{i}", on_click=go_to_ticker, args=(row['Ticker'],))
         else:
             st.info("No stocks found with RSI < 30 (Market is strong).")
 
@@ -412,21 +430,10 @@ elif page == "Market Scanner":
         st.caption("RSI > 70 indicates the stock may be overvalued.")
         if not overbought_df.empty:
             for i, row in overbought_df.iterrows():
-                # --- AI VERDICT TAG GENERATION ---
-                ai_tag = ""
-                if api_key:
-                    res = get_quick_analysis(row['Ticker'], api_key, selected_model)
-                    if res:
-                        s = res.get('signal', 'HOLD')
-                        css_class = "tag-buy" if "BUY" in s else "tag-sell" if "SELL" in s else "tag-hold"
-                        ai_tag = f'<span class="{css_class}">{s}</span>'
-                # ---------------------------------
-
                 with st.expander(f"**{row['Ticker']}** | RSI: {row['RSI']:.1f}"):
-                    st.markdown(f"**AI Verdict:** {ai_tag}", unsafe_allow_html=True)
                     st.write(f"Price: ${row['Price']:.2f}")
                     st.write(f"Market Cap: {format_number(row.get('MarketCap', 0))}")
-                    st.button(f"Detailed Analysis {row['Ticker']}", key=f"ob_{i}", on_click=go_to_ticker, args=(row['Ticker'],))
+                    st.button(f"Analyze {row['Ticker']}", key=f"ob_{i}", on_click=go_to_ticker, args=(row['Ticker'],))
         else:
             st.info("No stocks found with RSI > 70 (Market is weak).")
 
@@ -535,10 +542,6 @@ elif page == "Stock Analyst Pro":
                             
                             with t_rev:
                                 st.markdown("#### Reversal Patterns")
-                                
-
-#[Image of head and shoulders stock pattern diagram]
-
                                 rev_cols = st.columns(2)
                                 with rev_cols[0]:
                                     st.markdown("##### 🟢 Bullish (Buy)")
@@ -563,10 +566,6 @@ elif page == "Stock Analyst Pro":
 
                             with t_con:
                                 st.markdown("#### Continuation Patterns")
-                                
-
-#[Image of bullish flag chart pattern]
-
                                 con_cols = st.columns(2)
                                 with con_cols[0]:
                                     st.markdown("##### 🟢 Bullish")
