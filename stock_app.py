@@ -537,7 +537,7 @@ elif page == "Stock Analyst Pro":
                                 st.markdown("#### Reversal Patterns")
                                 
 
-[Image of head and shoulders stock pattern diagram]
+#[Image of head and shoulders stock pattern diagram]
 
                                 rev_cols = st.columns(2)
                                 with rev_cols[0]:
@@ -565,7 +565,7 @@ elif page == "Stock Analyst Pro":
                                 st.markdown("#### Continuation Patterns")
                                 
 
-[Image of bullish flag chart pattern]
+#[Image of bullish flag chart pattern]
 
                                 con_cols = st.columns(2)
                                 with con_cols[0]:
