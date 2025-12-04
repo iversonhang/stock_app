@@ -30,7 +30,6 @@ st.markdown("""
     .buy { background-color: #e6fffa; color: #00bfa5; border: 1px solid #00bfa5; }
     .sell { background-color: #fff5f5; color: #ff5252; border: 1px solid #ff5252; }
     .hold { background-color: #f0f2f6; color: #555; border: 1px solid #ccc; }
-    /* Compact buttons */
     div[data-testid="stButton"] button {
         padding: 0.25rem 0.75rem;
         font-size: 0.8rem;
@@ -102,15 +101,19 @@ def get_sp500_tickers():
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
         tables = pd.read_html(url)
         df = tables[0]
-        return df['Symbol'].tolist()
+        # Fix tickers: replace '.' with '-' (e.g. BRK.B -> BRK-B)
+        tickers = df['Symbol'].apply(lambda x: x.replace('.', '-')).tolist()
+        return tickers
     except:
-        return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK.B', 'V', 'JNJ']
+        # Fallback list if Wiki fails
+        return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK-B', 'V', 'JNJ', 'JPM', 'XOM']
 
-@st.cache_data(ttl=36000)
+@st.cache_data(ttl=3600)
 def get_market_scanner_data():
     tickers = get_sp500_tickers()
     
-    # 1. BATCH DOWNLOAD PRICES
+    # 1. BATCH DOWNLOAD
+    # Using 'threads=True' for speed
     data = yf.download(tickers, period="3mo", interval="1d", group_by='ticker', threads=True)
     
     rsi_candidates = []
@@ -118,12 +121,13 @@ def get_market_scanner_data():
     # 2. CALCULATE RSI
     for ticker in tickers:
         try:
+            # Handle MultiIndex
             if isinstance(data.columns, pd.MultiIndex):
                 if ticker in data.columns.get_level_values(0):
                     df = data[ticker].copy()
                 else: continue
             else:
-                df = data
+                df = data # Should not happen with multiple tickers
             
             if len(df) < 15: continue
             
@@ -154,16 +158,15 @@ def get_market_scanner_data():
         for item in sorted_list:
             if len(verified) >= 10: break 
             
-            # STRICT RSI FILTER
-            if is_oversold and item['RSI'] >= 30: continue
-            if not is_oversold and item['RSI'] <= 70: continue
+            # --- STRICT RSI FILTER ---
+            if is_oversold and item['RSI'] >= 30: continue # Must be < 30
+            if not is_oversold and item['RSI'] <= 70: continue # Must be > 70
             
             try:
-                # Fetch Market Cap
                 info = yf.Ticker(item['Ticker']).info
                 mkt_cap = info.get('marketCap', 0) or 0
                 
-                # Market Cap > 10 Million
+                # --- FILTER > 10 Million ---
                 if mkt_cap > 10_000_000:
                     item['MarketCap'] = mkt_cap
                     verified.append(item)
@@ -174,7 +177,7 @@ def get_market_scanner_data():
     oversold_df = get_verified_list(rsi_candidates, is_oversold=True)
     overbought_df = get_verified_list(rsi_candidates, is_oversold=False)
     
-    return oversold_df, overbought_df
+    return oversold_df, overbought_df, len(tickers)
 
 # --- TECHNICAL ANALYSIS FUNCTIONS ---
 
@@ -399,8 +402,15 @@ elif page == "Market Scanner":
     st.title("⚡ S&P 500 Market Scanner")
     st.markdown("Scanning stocks for extreme RSI conditions (Filtered by Market Cap > $10M)...")
     
+    # --- REFRESH BUTTON LOGIC ---
+    if st.button("🔄 Refresh Data"):
+        st.cache_data.clear()
+        st.rerun()
+    # ----------------------------
+
     with st.spinner("Batch processing S&P 500 data... (this runs once per hour)"):
-        oversold_df, overbought_df = get_market_scanner_data()
+        oversold_df, overbought_df, scanned_count = get_market_scanner_data()
+        st.caption(f"✅ Successfully scanned {scanned_count} stocks.")
         
     c1, c2 = st.columns(2)
     
@@ -414,7 +424,7 @@ elif page == "Market Scanner":
                     st.write(f"Market Cap: {format_number(row.get('MarketCap', 0))}")
                     st.button(f"Analyze {row['Ticker']}", key=f"os_{i}", on_click=go_to_ticker, args=(row['Ticker'],))
         else:
-            st.info("No oversold stocks found right now.")
+            st.info("No stocks found with RSI < 30 (Market is strong).")
 
     with c2:
         st.subheader("🔴 Top 10 Overbought (Sell Candidates)")
@@ -426,7 +436,7 @@ elif page == "Market Scanner":
                     st.write(f"Market Cap: {format_number(row.get('MarketCap', 0))}")
                     st.button(f"Analyze {row['Ticker']}", key=f"ob_{i}", on_click=go_to_ticker, args=(row['Ticker'],))
         else:
-            st.info("No overbought stocks found right now.")
+            st.info("No stocks found with RSI > 70 (Market is weak).")
 
 elif page == "Stock Analyst Pro":
     st.title("🔎 Stock Technical Analyzer")
