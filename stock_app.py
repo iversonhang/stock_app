@@ -106,7 +106,7 @@ def get_sp500_tickers():
     except:
         return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK.B', 'V', 'JNJ']
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=36000)
 def get_market_scanner_data():
     tickers = get_sp500_tickers()
     
@@ -328,7 +328,7 @@ else:
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-default_model_name = "gemini-flash-lite-latest"
+default_model_name = "gemini-flash-latest"
 selected_model = default_model_name
 
 if api_key:
