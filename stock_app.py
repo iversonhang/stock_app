@@ -6,8 +6,8 @@ from plotly.subplots import make_subplots
 import requests
 from datetime import datetime
 import xml.etree.ElementTree as ET
-from email.utils import parsedate_to_datetime # Standard library for RSS date parsing
-from bs4 import BeautifulSoup # For cleaning HTML summaries
+from email.utils import parsedate_to_datetime
+from bs4 import BeautifulSoup 
 
 # --- CONFIGURATION ---
 st.set_page_config(
@@ -23,10 +23,15 @@ st.markdown("""
         border: 1px solid #f0f2f6;
         border-radius: 8px;
         margin-bottom: 10px;
+        background-color: #ffffff;
     }
     .streamlit-expanderHeader {
-        font-size: 16px;
+        font-size: 15px;
         font-weight: 600;
+        color: #0e1117;
+    }
+    .metric-container {
+        padding: 10px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -77,8 +82,8 @@ def get_financials_data(ticker):
 @st.cache_data(ttl=900) 
 def get_general_headlines():
     """
-    Fetches Yahoo Finance RSS, parses dates, sorts by Newest,
-    and cleans up the description to create a summary.
+    Fetches Yahoo Finance RSS with robust fallback for summaries.
+    Handles 'media' namespaces where the actual text often hides.
     """
     news_items = []
     try:
@@ -87,26 +92,48 @@ def get_general_headlines():
         response = requests.get(url, headers=headers)
         root = ET.fromstring(response.content)
         
+        # Yahoo uses the Media RSS namespace
+        ns = {'media': 'http://search.yahoo.com/mrss/'}
+        
         for item in root.findall('./channel/item'):
             title = item.find('title').text if item.find('title') is not None else 'No Title'
             link = item.find('link').text if item.find('link') is not None else '#'
             pub_date_str = item.find('pubDate').text if item.find('pubDate') is not None else ''
-            description_html = item.find('description').text if item.find('description') is not None else ''
             
-            # 1. Parse Date for Sorting
+            # --- ROBUST SUMMARY EXTRACTION ---
+            summary_text = ""
+            
+            # Strategy 1: Standard Description
+            desc_tag = item.find('description')
+            if desc_tag is not None and desc_tag.text:
+                summary_text = desc_tag.text
+            
+            # Strategy 2: Media Description (Namespaced) - often contains the real text
+            # If standard description is empty or too short (likely just an image link)
+            if len(summary_text) < 20:
+                media_desc = item.find('media:description', ns)
+                if media_desc is not None and media_desc.text:
+                    summary_text = media_desc.text
+                else:
+                    # Strategy 3: Media Text
+                    media_text = item.find('media:text', ns)
+                    if media_text is not None and media_text.text:
+                        summary_text = media_text.text
+
+            # Clean HTML tags using BeautifulSoup
+            if summary_text:
+                soup = BeautifulSoup(summary_text, 'html.parser')
+                summary_text = soup.get_text().strip()
+            
+            # Final Fallback
+            if not summary_text or len(summary_text) < 10:
+                summary_text = "No summary provided by source. Click the link to read the full article."
+
+            # Date Parsing
             try:
                 pub_date_obj = parsedate_to_datetime(pub_date_str)
             except:
                 pub_date_obj = datetime.min
-
-            # 2. Clean HTML description to make a text summary
-            summary_text = "No summary available."
-            if description_html:
-                soup = BeautifulSoup(description_html, 'html.parser')
-                summary_text = soup.get_text()
-                # Determine if it's too short
-                if len(summary_text) < 10:
-                    summary_text = "Click the link to read the full story."
 
             news_items.append({
                 'title': title,
@@ -116,14 +143,13 @@ def get_general_headlines():
                 'summary': summary_text
             })
             
-        # 3. Sort by Date Descending (Newest first)
         news_items.sort(key=lambda x: x['pubDateObj'], reverse=True)
             
     except Exception as e:
         print(f"RSS Error: {e}")
         return []
         
-    return news_items[:20] # Return top 20
+    return news_items[:20]
 
 @st.cache_data(ttl=300)
 def get_ticker_news(ticker):
@@ -151,7 +177,7 @@ st.sidebar.markdown("---")
 if page == "Global Headlines":
     st.title("🌍 Global Financial Headlines")
     
-    # 1. Market Snapshot (With Fallback)
+    # 1. Market Snapshot
     st.subheader("Market Snapshot")
     indices = [
         {"name": "S&P 500", "ticker": "^GSPC", "fallback": "SPY"},
@@ -167,11 +193,9 @@ if page == "Global Headlines":
         name = item["name"]
         ticker = item["ticker"]
         
-        # Try primary
         t = yf.Ticker(ticker)
         hist = t.history(period="5d")
         
-        # Try fallback if empty
         if hist.empty:
             t = yf.Ticker(item["fallback"])
             hist = t.history(period="5d")
@@ -189,9 +213,9 @@ if page == "Global Headlines":
 
     st.markdown("---")
 
-    # 2. News Feed (Summary + No Redirect)
+    # 2. News Feed
     st.subheader("Latest News Briefs")
-    st.caption("Click on a headline to read the summary.")
+    st.caption("Click on a headline to reveal the summary.")
     
     with st.spinner("Fetching latest news summaries..."):
         general_news = get_general_headlines()
@@ -202,13 +226,11 @@ if page == "Global Headlines":
         for article in general_news:
             title = article['title']
             summary = article['summary']
-            # Format date nicely (e.g., 04 Dec 14:30)
-            date_display = article['pubDateObj'].strftime("%d %b %H:%M") if article['pubDateObj'] != datetime.min else ""
+            date_display = article['pubDateObj'].strftime("%H:%M") if article['pubDateObj'] != datetime.min else ""
             
-            # Using Expander to keep user on page
             with st.expander(f"🕒 {date_display} | {title}"):
                 st.write(summary)
-                st.markdown(f"[Read original source]({article['link']})")
+                st.markdown(f"👉 [Read full article on Yahoo Finance]({article['link']})")
 
 # --- PAGE 2: STOCK ANALYST PRO ---
 elif page == "Stock Analyst Pro":
@@ -279,7 +301,6 @@ elif page == "Stock Analyst Pro":
                     if news:
                         for n in news[:10]:
                             with st.expander(f"{n.get('title')}"):
-                                # Try to get thumbnail info if available
                                 st.write(f"Publisher: {n.get('publisher')}")
                                 st.markdown(f"[Read full story]({n.get('link')})")
                     else: st.info("No news.")
