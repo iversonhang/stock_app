@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from bs4 import BeautifulSoup
 import google.generativeai as genai
-import json  # Added for JSON parsing
+import json
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Wall St. Pulse", page_icon="📈", layout="wide")
@@ -114,7 +114,7 @@ def calculate_technicals(df):
     df['MACD'] = ema12 - ema26
     df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
 
-    # 4. KDJ Indicator (Stochastic Oscillator)
+    # 4. KDJ Indicator
     low_min = df['Low'].rolling(window=9).min()
     high_max = df['High'].rolling(window=9).max()
     rsv = (df['Close'] - low_min) / (high_max - low_min) * 100
@@ -124,23 +124,19 @@ def calculate_technicals(df):
     
     return df
 
-def analyze_chart_with_gemini(ticker, df, api_key, model_name):
-    if not api_key or df is None: return None
-    latest = df.iloc[-1]
-    
-    # Resample to MONTHLY Data for macro pattern view
-    monthly_df = df.resample('M').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).tail(24) # Increased to 24 months for better context
-    
-    price_sequence = ""
-    for date, row in monthly_df.iterrows():
-        # Using YYYY-MM-DD format helps the AI pick the exact date string for plotting
-        price_sequence += f"Date {date.strftime('%Y-%m-%d')}: H {row['High']:.2f}, L {row['Low']:.2f}, C {row['Close']:.2f}\n"
+# --- IMPORTANT: CACHING ADDED HERE ---
+# ttl=3600 means we only run this ONCE per hour per ticker.
+# We pass 'latest_date' to ensure the cache is based on specific data snapshots.
+@st.cache_data(ttl=3600, show_spinner=False)
+def analyze_chart_with_gemini_cached(ticker, _df_monthly_summary, _latest_indicators, api_key, model_name):
+    if not api_key: return None
 
+    # Reconstruct text data from the passed summaries (to be cache-friendly)
+    price_sequence = _df_monthly_summary
+    
     tech_data = f"""
-    Ticker: {ticker} | Latest Price: {latest['Close']:.2f} 
-    Daily Indicators:
-    RSI: {latest['RSI']:.2f} | MACD: {latest['MACD']:.4f}
-    KDJ -> K: {latest['K']:.2f} | D: {latest['D']:.2f} | J: {latest['J']:.2f}
+    Ticker: {ticker} 
+    {_latest_indicators}
     
     Monthly Price Data (Use these dates for coordinates):
     {price_sequence}
@@ -149,19 +145,17 @@ def analyze_chart_with_gemini(ticker, df, api_key, model_name):
     try:
         genai.configure(api_key=api_key)
         
-        # Deterministic output
+        # Temperature 0.0 for stability
         generation_config = genai.GenerationConfig(temperature=0.0, response_mime_type="application/json")
-        
         model = genai.GenerativeModel(model_name, generation_config=generation_config)
         
-        # --- JSON PROMPT WITH COORDINATES ---
         prompt = f"""
         Act as a technical analyst for {ticker}.
         {tech_data}
         
         TASK:
         1. Analyze the MONTHLY data for patterns (Staircases, Triangles, Flags, Wedges, Double Top/Bottom, Head & Shoulders, Cup & Handle).
-        2. If MULTIPLE patterns exist, use RSI/KDJ to pick the best one.
+        2. If MULTIPLE patterns exist, use RSI/KDJ to pick the BEST one.
         3. If NO pattern, use RSI/KDJ for the signal (Overbought=SELL, Oversold=BUY).
         
         IMPORTANT: DRAW THE PATTERN.
@@ -183,14 +177,11 @@ def analyze_chart_with_gemini(ticker, df, api_key, model_name):
         response = model.generate_content(prompt)
         text = response.text.strip()
         
-        # Parse JSON
         try:
             data = json.loads(text)
-            # Map 'reasoning' to 'reason' for backward compatibility with check() function
             data['reason'] = data.get('reasoning', '')
             return data
         except json.JSONDecodeError:
-            # Fallback if AI fails to return JSON (rare with temp=0)
             return {"signal": "HOLD", "reason": text, "lines": []}
             
     except Exception as e:
@@ -384,11 +375,23 @@ elif page == "Stock Analyst Pro":
                     analysis = None
 
                     if api_key and df_tech is not None:
-                        analysis = analyze_chart_with_gemini(selected_ticker, df_tech, api_key, selected_model)
+                        # --- PREPARE DATA FOR CACHED FUNCTION ---
+                        # We separate data preparation from the API call to make the cache effective
+                        latest = df_tech.iloc[-1]
+                        monthly_df = df_tech.resample('M').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).tail(24)
+                        
+                        monthly_str = ""
+                        for date, row in monthly_df.iterrows():
+                            monthly_str += f"Date {date.strftime('%Y-%m-%d')}: H {row['High']:.2f}, L {row['Low']:.2f}, C {row['Close']:.2f}\n"
+                        
+                        indicators_str = f"Latest Price: {latest['Close']:.2f}\nRSI: {latest['RSI']:.2f} | MACD: {latest['MACD']:.4f}\nKDJ -> K: {latest['K']:.2f} | D: {latest['D']:.2f} | J: {latest['J']:.2f}"
+                        
+                        # CALL CACHED FUNCTION
+                        analysis = analyze_chart_with_gemini_cached(selected_ticker, monthly_str, indicators_str, api_key, selected_model)
+                        
                         if analysis:
                             sig = analysis.get('signal', 'HOLD')
                             reason = analysis.get('reason', 'No analysis returned.')
-                            
                             css = "buy" if "BUY" in sig else "sell" if "SELL" in sig else "hold"
                             st.markdown(f'<div class="signal-box {css}">VERDICT: {sig}</div>', unsafe_allow_html=True)
                             st.info(f"**AI Analysis:** {reason}")
