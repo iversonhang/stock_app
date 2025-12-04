@@ -1,6 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
@@ -18,6 +19,10 @@ st.markdown("""
     <style>
     .stExpander { border: 1px solid #f0f2f6; border-radius: 8px; margin-bottom: 10px; background-color: #ffffff; }
     .streamlit-expanderHeader { font-size: 15px; font-weight: 600; color: #0e1117; }
+    .signal-box { padding: 15px; border-radius: 10px; margin-bottom: 20px; text-align: center; font-weight: bold; font-size: 24px; }
+    .buy { background-color: #e6fffa; color: #00bfa5; border: 1px solid #00bfa5; }
+    .sell { background-color: #fff5f5; color: #ff5252; border: 1px solid #ff5252; }
+    .hold { background-color: #f0f2f6; color: #555; border: 1px solid #ccc; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -42,9 +47,7 @@ def search_symbol(query):
 def get_stock_info(ticker):
     try:
         stock = yf.Ticker(ticker)
-        # Force a fetch to check validity
-        info = stock.info
-        return info if 'symbol' in info else None
+        return stock.info if 'symbol' in stock.info else None
     except: return None
 
 @st.cache_data(ttl=300)
@@ -70,180 +73,215 @@ def format_number(num):
         return f"{num:.2f}"
     return "N/A"
 
-# --- CORE LOGIC: RSS + GEMINI ---
+# --- TECHNICAL ANALYSIS FUNCTIONS ---
+
+def calculate_technicals(df):
+    if len(df) < 50: return None 
+    
+    # Standard Indicators
+    df['SMA50'] = df['Close'].rolling(window=50).mean()
+    df['SMA200'] = df['Close'].rolling(window=200).mean()
+    
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = ema12 - ema26
+    df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    
+    return df
+
+def analyze_chart_with_gemini(ticker, df, api_key, model_name):
+    if not api_key or df is None: return None
+    
+    # 1. Get Technical Snapshot
+    latest = df.iloc[-1]
+    
+    # 2. Extract Price Sequence (Last 12 Weeks) to help AI "see" the shape
+    # Resample to weekly to get a broader view of the pattern
+    weekly_df = df.resample('W').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).tail(12)
+    price_sequence = ""
+    for date, row in weekly_df.iterrows():
+        price_sequence += f"Week {date.strftime('%Y-%m-%d')}: High {row['High']:.2f}, Low {row['Low']:.2f}, Close {row['Close']:.2f}\n"
+
+    # 3. Construct the Data Prompt
+    tech_data = f"""
+    Ticker: {ticker}
+    Current Price: {latest['Close']:.2f}
+    RSI (14): {latest['RSI']:.2f}
+    MACD: {latest['MACD']:.4f}
+    SMA 50: {latest['SMA50']:.2f}
+    SMA 200: {latest['SMA200']:.2f}
+    Trend: {"Above" if latest['Close'] > latest['SMA200'] else "Below"} 200 SMA
+    
+    Recent Weekly Price Action (Use this to identify the shape):
+    {price_sequence}
+    """
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        
+        # 4. The Pattern Recognition Prompt
+        prompt = f"""
+        Act as a professional technical chartist. Analyze the provided price action and technicals for {ticker}.
+        
+        {tech_data}
+        
+        Your Goal: Identify if any of the following 11 patterns are forming or completing:
+        1. Ascending staircases (Bullish Trend)
+        2. Descending staircases (Bearish Trend)
+        3. Ascending triangle
+        4. Descending triangle
+        5. Symmetrical triangle
+        6. Flag (Bull or Bear)
+        7. Wedge (Falling or Rising)
+        8. Double top
+        9. Double bottom
+        10. Head and shoulders (or Inverse H&S)
+        11. Rounded top or bottom
+        12. Cup and handle
+
+        Instructions:
+        1. Analyze the "Recent Weekly Price Action" numbers to visualize the shape.
+        2. Determine the most likely pattern from the list above.
+        3. Provide a VERDICT: BUY, SELL, or HOLD.
+        4. Provide REASONING: Mention the pattern identified and why it supports the verdict.
+
+        Output strictly in this format: 
+        VERDICT ||| Pattern Name: [Name] - [Reasoning]
+        """
+        
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        
+        if "|||" in text:
+            parts = text.split("|||")
+            return {"signal": parts[0].strip().upper(), "reason": parts[1].strip()}
+        else:
+            return {"signal": "HOLD", "reason": text}
+            
+    except Exception as e:
+        return {"signal": "ERROR", "reason": str(e)}
+
+# --- NEWS FUNCTIONS ---
 
 def fetch_rss_feed():
-    """Fetches raw RSS items without AI processing."""
     items = []
     try:
         url = "https://finance.yahoo.com/news/rssindex"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers)
         root = ET.fromstring(response.content)
-        
-        # Limit to top 10 for AI speed
         for item in root.findall('./channel/item')[:10]: 
             title = item.find('title').text
             link = item.find('link').text
             pub_date = item.find('pubDate').text
             description = item.find('description').text if item.find('description') is not None else ""
-            
             if description:
                 soup = BeautifulSoup(description, 'html.parser')
                 description = soup.get_text().strip()
-
-            items.append({
-                'title': title,
-                'link': link,
-                'pub_date': pub_date,
-                'raw_desc': description
-            })
-    except Exception as e:
-        st.error(f"RSS Error: {e}")
-        return []
+            items.append({'title': title, 'link': link, 'pub_date': pub_date, 'raw_desc': description})
+    except: return []
     return items
 
-def summarize_with_gemini(news_items, api_key, model_name):
+def summarize_news_with_gemini(news_items, api_key, model_name):
     if not api_key: return news_items 
-
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
-        
-        # --- PROMPT FOR SIGNALS ---
-        prompt = """
-        Analyze the following financial news headlines. For each one:
-        1. Write a 2-sentence summary.
-        2. Assign a one-word signal: "BUY", "SELL", or "HOLD".
-        
-        Return format: Summary text... %% SIGNAL
-        Separate items with '|||'.
-        """
-        
-        for item in news_items:
-            prompt += f"\nHeadline: {item['title']}\nContext: {item['raw_desc']}\n"
-
+        prompt = "Summarize headlines. Assign BUY, SELL, HOLD. Format: Summary %% SIGNAL. Separator: |||.\n\n"
+        for item in news_items: prompt += f"Head: {item['title']}\nCtx: {item['raw_desc']}\n"
         response = model.generate_content(prompt)
-        raw_responses = response.text.split('|||')
-        
+        res_list = response.text.split('|||')
         for i, item in enumerate(news_items):
-            if i < len(raw_responses):
-                full_text = raw_responses[i].strip()
-                if "%%" in full_text:
-                    parts = full_text.split("%%")
-                    item['summary'] = parts[0].strip()
-                    item['signal'] = parts[1].strip().upper()
+            if i < len(res_list):
+                txt = res_list[i].strip()
+                if "%%" in txt:
+                    p = txt.split("%%")
+                    item['summary'] = p[0].strip()
+                    item['signal'] = p[1].strip().upper()
                 else:
-                    item['summary'] = full_text
+                    item['summary'] = txt
                     item['signal'] = "HOLD"
-            else:
-                item['summary'] = item['raw_desc']
-                item['signal'] = "HOLD"
-                
-    except Exception as e:
-        for item in news_items:
-            item['summary'] = f"AI Error: {item['raw_desc']}"
-            item['signal'] = "HOLD"
-            
+    except: pass
     return news_items
 
-# --- SIDEBAR CONFIG ---
+# --- SIDEBAR ---
 st.sidebar.title("Configuration")
 api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-# Dynamic Model Selection
 selected_model = "gemini-1.5-flash" 
 if api_key:
     try:
         genai.configure(api_key=api_key)
         models = genai.list_models()
-        model_options = [m.name.replace("models/", "") for m in models if "generateContent" in m.supported_generation_methods]
-        model_options.sort()
-        if model_options:
-            selected_model = st.sidebar.selectbox("Choose AI Model", model_options, index=0)
+        opts = [m.name.replace("models/", "") for m in models if "generateContent" in m.supported_generation_methods]
+        opts.sort()
+        if opts: selected_model = st.sidebar.selectbox("Choose AI Model", opts, index=0)
     except: pass
 
-# --- MAIN PAGE LAYOUT ---
+# --- MAIN LAYOUT ---
 
 page = st.sidebar.radio("Go to", ["Global Headlines", "Stock Analyst Pro"])
 
-# --- PAGE 1: GLOBAL HEADLINES ---
 if page == "Global Headlines":
     st.title("🌍 Global Financial Headlines")
-    
     st.subheader("Market Snapshot")
-    indices = [
-        {"name": "S&P 500", "ticker": "^GSPC", "fallback": "SPY"},
-        {"name": "Nasdaq", "ticker": "^IXIC", "fallback": "QQQ"},
-        {"name": "Gold", "ticker": "GC=F", "fallback": "GLD"},
-        {"name": "Oil", "ticker": "CL=F", "fallback": "USO"}
-    ]
+    indices = [{"n": "S&P 500", "t": "^GSPC", "f": "SPY"}, {"n": "Nasdaq", "t": "^IXIC", "f": "QQQ"}, {"n": "Gold", "t": "GC=F", "f": "GLD"}, {"n": "Oil", "t": "CL=F", "f": "USO"}]
     cols = st.columns(len(indices))
-    for i, idx in enumerate(indices):
-        t = yf.Ticker(idx["ticker"])
-        hist = t.history(period="5d")
-        if hist.empty:
-            t = yf.Ticker(idx["fallback"])
-            hist = t.history(period="5d")
-        
+    for i, x in enumerate(indices):
+        t = yf.Ticker(x["t"])
+        h = t.history(period="5d")
+        if h.empty: h = yf.Ticker(x["f"]).history(period="5d")
         with cols[i]:
-            if len(hist) >= 2:
-                curr = hist['Close'].iloc[-1]
-                prev = hist['Close'].iloc[-2]
-                st.metric(idx["name"], f"{curr:,.2f}", f"{curr-prev:,.2f}")
-            else:
-                st.metric(idx["name"], "N/A")
-
+            if len(h)>=2:
+                cur = h['Close'].iloc[-1]
+                delta = cur - h['Close'].iloc[-2]
+                st.metric(x["n"], f"{cur:,.2f}", f"{delta:,.2f}")
+            else: st.metric(x["n"], "N/A")
+    
     st.markdown("---")
     st.subheader(f"AI Market Signals ({selected_model})")
     
     if not api_key:
-        st.warning("⚠️ Enter Gemini API Key to see Buy/Sell/Hold signals.")
-        with st.spinner("Fetching news..."):
-            raw_news = fetch_rss_feed()
-            for item in raw_news:
-                with st.expander(f"{item['title']}"):
-                    st.write(item['raw_desc'])
-                    st.markdown(f"[Read Source]({item['link']})")
+        st.warning("⚠️ Enter Gemini API Key.")
+        raw = fetch_rss_feed()
+        for i in raw: st.write(f"- [{i['title']}]({i['link']})")
     else:
-        st.caption("Disclaimer: Signals are AI-generated based on news sentiment and are NOT financial advice.")
-        with st.spinner(f"🤖 Analyzing market sentiment..."):
-            raw_items = fetch_rss_feed()
-            ai_news = summarize_with_gemini(raw_items, api_key, selected_model)
-            
-            for item in ai_news:
-                summary = item.get('summary', item['raw_desc'])
-                signal = item.get('signal', 'HOLD').replace("**", "").strip()
-                color = "grey"
-                if "BUY" in signal: color = "green"
-                elif "SELL" in signal: color = "red"
-                
+        with st.spinner("Analyzing news sentiment..."):
+            items = fetch_rss_feed()
+            ai_items = summarize_news_with_gemini(items, api_key, selected_model)
+            for item in ai_items:
+                sig = item.get('signal', 'HOLD').replace("**","").strip()
+                col = "green" if "BUY" in sig else "red" if "SELL" in sig else "grey"
                 try: dt = parsedate_to_datetime(item['pub_date']).strftime("%H:%M")
                 except: dt = ""
-                
                 with st.expander(f"🕒 {dt} | {item['title']}"):
-                    st.markdown(f"**AI Sentiment:** :{color}[**{signal}**]")
-                    st.write(summary)
-                    st.markdown(f"👉 [Read full article]({item['link']})")
+                    st.markdown(f"**Signal:** :{col}[**{sig}**]")
+                    st.write(item.get('summary', ''))
+                    st.markdown(f"[Read More]({item['link']})")
 
-# --- PAGE 2: STOCK ANALYST PRO ---
 elif page == "Stock Analyst Pro":
-    st.title("🔎 Stock Analyzer")
+    st.title("🔎 Stock Technical Analyzer")
     query = st.text_input("Search Ticker:")
     
     if query:
         res = search_symbol(query)
         if res:
-            options = [f"{r['symbol']} - {r['name']}" for r in res]
-            choice = st.selectbox("Select:", options)
-            selected_ticker = choice.split(" - ")[0]
+            choice = st.selectbox("Select:", [f"{r['symbol']} - {r['name']}" for r in res])
+            ticker = choice.split(" - ")[0]
             
-            if selected_ticker:
+            if ticker:
                 st.markdown("---")
-                with st.spinner(f"Analyzing {selected_ticker}..."):
-                    info = get_stock_info(selected_ticker)
+                with st.spinner(f"Scanning chart for {ticker}..."):
+                    info = get_stock_info(ticker)
                     
                     if info:
                         # Header
@@ -251,65 +289,59 @@ elif page == "Stock Analyst Pro":
                         with c1: 
                             if info.get('logo_url'): st.image(info['logo_url'], width=80)
                         with c2:
-                            st.header(f"{info.get('shortName')} ({selected_ticker})")
-                            st.write(f"{info.get('sector', '')} | {info.get('industry', '')}")
+                            st.header(f"{info.get('shortName')} ({ticker})")
+                            st.write(f"{info.get('sector', '')}")
                         with c3:
                             p = info.get('currentPrice', info.get('regularMarketPrice'))
-                            prev = info.get('previousClose')
-                            if p and prev: st.metric("Price", f"${p:,.2f}", f"{p-prev:.2f}")
+                            if p: st.metric("Price", f"${p:,.2f}")
 
-                        # --- RESTORED 5 TABS ---
-                        t1, t2, t3, t4, t5 = st.tabs(["Chart", "Fundamentals", "Financials", "Profile", "News"])
+                        # --- AI CHART ANALYSIS ---
+                        st.subheader("🤖 Pattern Recognition (AI)")
                         
-                        # Tab 1: Chart
-                        with t1:
-                            h = get_stock_history(selected_ticker, '1y')
-                            if not h.empty:
-                                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_width=[0.2, 0.7])
-                                fig.add_trace(go.Candlestick(x=h.index, open=h['Open'], high=h['High'], low=h['Low'], close=h['Close'], name='Price'), row=1, col=1)
-                                h['SMA50'] = h['Close'].rolling(50).mean()
-                                fig.add_trace(go.Scatter(x=h.index, y=h['SMA50'], line=dict(color='blue', width=1), name='SMA 50'), row=1, col=1)
-                                fig.add_trace(go.Bar(x=h.index, y=h['Volume'], name='Vol'), row=2, col=1)
-                                fig.update_layout(height=600, xaxis_rangeslider_visible=False)
-                                st.plotly_chart(fig, use_container_width=True)
+                        hist = get_stock_history(ticker, '2y') # Need 2y for patterns like Cup & Handle
+                        df_tech = calculate_technicals(hist.copy())
+                        
+                        if api_key and df_tech is not None:
+                            analysis = analyze_chart_with_gemini(ticker, df_tech, api_key, selected_model)
+                            
+                            if analysis:
+                                sig = analysis['signal']
+                                reason = analysis['reason']
+                                css = "buy" if "BUY" in sig else "sell" if "SELL" in sig else "hold"
+                                st.markdown(f'<div class="signal-box {css}">VERDICT: {sig}</div>', unsafe_allow_html=True)
+                                st.info(f"**Pattern Detected:** {reason}")
+                        elif not api_key:
+                            st.warning("Enter API Key in sidebar to unlock Pattern Recognition.")
 
-                        # Tab 2: Fundamentals (Restored)
-                        with t2:
-                            col_a, col_b = st.columns(2)
-                            with col_a:
+                        st.markdown("---")
+
+                        # --- TABS ---
+                        tabs = st.tabs(["Chart", "Fundamentals", "Financials", "News"])
+                        
+                        with tabs[0]: 
+                            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_width=[0.2, 0.7])
+                            fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='Price'), row=1, col=1)
+                            if df_tech is not None:
+                                fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['SMA50'], line=dict(color='orange', width=1), name='SMA 50'), row=1, col=1)
+                                fig.add_trace(go.Scatter(x=df_tech.index, y=df_tech['SMA200'], line=dict(color='blue', width=1), name='SMA 200'), row=1, col=1)
+                            fig.add_trace(go.Bar(x=hist.index, y=hist['Volume'], name='Vol'), row=2, col=1)
+                            fig.update_layout(height=600, xaxis_rangeslider_visible=False)
+                            st.plotly_chart(fig, use_container_width=True)
+
+                        with tabs[1]:
+                            c_a, c_b = st.columns(2)
+                            with c_a:
                                 st.write(f"**Mkt Cap:** {format_number(info.get('marketCap'))}")
                                 st.write(f"**P/E:** {info.get('trailingPE', '-')}")
-                                st.write(f"**Beta:** {info.get('beta', '-')}")
-                            with col_b:
+                            with c_b:
                                 st.write(f"**52W High:** {info.get('fiftyTwoWeekHigh', '-')}")
                                 st.write(f"**Div Yield:** {info.get('dividendYield', 0)*100:.2f}%")
-                                st.write(f"**Profit Margin:** {info.get('profitMargins', 0)*100:.2f}%")
 
-                        # Tab 3: Financials
-                        with t3:
-                            st.caption("Annual Income Statement")
-                            f, _, _ = get_financials_data(selected_ticker)
+                        with tabs[2]:
+                            f, _, _ = get_financials_data(ticker)
                             st.dataframe(f)
 
-                        # Tab 4: Profile (Restored)
-                        with t4:
-                            st.subheader("Business Summary")
-                            st.write(info.get('longBusinessSummary', 'No summary available.'))
-                            st.markdown("---")
-                            st.write(f"**Website:** {info.get('website', 'N/A')}")
-                            st.write(f"**Employees:** {info.get('fullTimeEmployees', 'N/A')}")
-
-                        # Tab 5: News (Restored)
-                        with t5:
-                            st.subheader(f"Recent News for {selected_ticker}")
-                            news = get_ticker_news(selected_ticker)
-                            if news:
-                                for n in news[:10]:
-                                    with st.expander(f"{n.get('title')}"):
-                                        st.write(f"Publisher: {n.get('publisher')}")
-                                        st.markdown(f"[Read full story]({n.get('link')})")
-                            else: st.info("No specific news found.")
-                    else:
-                        st.error("Could not load data.")
-        else:
-            st.warning("No results found.")
+                        with tabs[3]:
+                            news = get_ticker_news(ticker)
+                            for n in news[:5]:
+                                st.write(f"- [{n.get('title')}]({n.get('link')})")
