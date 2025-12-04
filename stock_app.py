@@ -1,7 +1,6 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
@@ -24,14 +23,11 @@ st.markdown("""
     .sell { background-color: #fff5f5; color: #ff5252; border: 1px solid #ff5252; }
     .hold { background-color: #f0f2f6; color: #555; border: 1px solid #ccc; }
     .ticker-tag { 
-        background-color: #f0f2f6; 
-        color: #31333F; 
-        padding: 2px 8px; 
-        border-radius: 4px; 
-        font-size: 12px; 
-        font-weight: bold;
-        border: 1px solid #d6d6d6;
-        margin-right: 8px;
+        background-color: #f0f2f6; color: #31333F; padding: 2px 8px; border-radius: 4px; 
+        font-size: 12px; font-weight: bold; border: 1px solid #d6d6d6; margin-right: 8px;
+    }
+    .pattern-card {
+        padding: 10px; border: 1px solid #eee; border-radius: 5px; margin-bottom: 10px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -111,15 +107,22 @@ def analyze_chart_with_gemini(ticker, df, api_key, model_name):
     if not api_key or df is None: return None
     latest = df.iloc[-1]
     
-    weekly_df = df.resample('W').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).tail(12)
+    # Extract Price Sequence (Last 15 Weeks) to help AI "see" the shape
+    weekly_df = df.resample('W').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).tail(15)
     price_sequence = ""
     for date, row in weekly_df.iterrows():
-        price_sequence += f"Week {date.strftime('%Y-%m-%d')}: H {row['High']:.2f}, L {row['Low']:.2f}, C {row['Close']:.2f}\n"
+        price_sequence += f"Week {date.strftime('%Y-%m-%d')}: High {row['High']:.2f}, Low {row['Low']:.2f}, Close {row['Close']:.2f}\n"
 
     tech_data = f"""
-    Ticker: {ticker} | Price: {latest['Close']:.2f} | RSI: {latest['RSI']:.2f} | MACD: {latest['MACD']:.4f}
-    SMA50: {latest['SMA50']:.2f} | SMA200: {latest['SMA200']:.2f}
-    Weekly Prices:
+    Ticker: {ticker}
+    Current Price: {latest['Close']:.2f}
+    RSI (14): {latest['RSI']:.2f}
+    MACD: {latest['MACD']:.4f}
+    SMA 50: {latest['SMA50']:.2f}
+    SMA 200: {latest['SMA200']:.2f}
+    Trend: {"Above" if latest['Close'] > latest['SMA200'] else "Below"} 200 SMA
+    
+    Recent Weekly Price Action (Use this to visualize the shape):
     {price_sequence}
     """
 
@@ -128,20 +131,30 @@ def analyze_chart_with_gemini(ticker, df, api_key, model_name):
         model = genai.GenerativeModel(model_name)
         
         prompt = f"""
-        Act as a technical analyst. Analyze the chart data for {ticker}.
+        Act as a professional technical chartist. Analyze the provided price action and technicals for {ticker}.
         
         {tech_data}
         
-        Check for these patterns:
-        1. Ascending/Descending staircases
-        2. Ascending/Descending/Symmetrical triangles
-        3. Flag or Wedge
-        4. Double top/bottom
-        5. Head and shoulders
-        6. Cup and handle
+        Your Goal: Identify if any of the following 11 patterns are forming or completing. 
+        
+        Reference for Patterns:
+        1. Ascending/Descending Staircases (Trend)
+        2. Ascending/Descending/Symmetrical Triangles
+        3. Bull/Bear Flags
+        4. Rising/Falling Wedges
+        5. Double Top/Bottom
+        6. Head and Shoulders (or Inverse)
+        7. Rounded Top/Bottom
+        8. Cup and Handle
 
-        Output strictly: VERDICT ||| Pattern Name: [Name] - [Reasoning]
-        VERDICT must be BUY, SELL, or HOLD.
+        Instructions:
+        1. Analyze the "Recent Weekly Price Action" numbers to visualize the shape (peaks and troughs).
+        2. Determine the most likely pattern from the list above.
+        3. Provide a VERDICT: BUY, SELL, or HOLD.
+        4. Provide REASONING: Mention the pattern identified, the breakout status, and why it supports the verdict.
+
+        Output strictly in this format: 
+        VERDICT ||| Pattern Name: [Name] - [Reasoning]
         """
         
         response = model.generate_content(prompt)
@@ -183,7 +196,6 @@ def summarize_news_with_gemini(news_items, api_key, model_name):
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
         
-        # PROMPT UPGRADE: Extract Ticker Symbol
         prompt = """
         Analyze headlines. 
         1. Summarize in 2 sentences. 
@@ -238,6 +250,7 @@ if api_key:
 
 page = st.sidebar.radio("Go to", ["Global Headlines", "Stock Analyst Pro"])
 
+# --- PAGE 1: GLOBAL HEADLINES ---
 if page == "Global Headlines":
     st.title("🌍 Global Financial Headlines")
     
@@ -276,15 +289,14 @@ if page == "Global Headlines":
                 except: dt = ""
                 
                 with st.expander(f"🕒 {dt} | {item['title']}"):
-                    # Display Ticker Tag + Signal
                     st.markdown(f"""
                         <span class="ticker-tag">{tik}</span>
                         <span style="color:{col}; font-weight:bold;">{sig}</span>
                     """, unsafe_allow_html=True)
-                    
                     st.write(item.get('summary', ''))
                     st.markdown(f"[Read More]({item['link']})")
 
+# --- PAGE 2: STOCK ANALYST PRO ---
 elif page == "Stock Analyst Pro":
     st.title("🔎 Stock Technical Analyzer")
     query = st.text_input("Search Ticker:")
@@ -322,12 +334,73 @@ elif page == "Stock Analyst Pro":
                                 sig = analysis['signal']
                                 css = "buy" if "BUY" in sig else "sell" if "SELL" in sig else "hold"
                                 st.markdown(f'<div class="signal-box {css}">VERDICT: {sig}</div>', unsafe_allow_html=True)
-                                st.info(f"**Pattern Detected:** {analysis['reason']}")
+                                st.info(f"**AI Analysis:** {analysis['reason']}")
                         elif not api_key:
                             st.warning("Enter API Key in sidebar to unlock Pattern Recognition.")
 
+                        # --- NEW: CHART PATTERN REFERENCE GUIDE ---
+                        with st.expander("📘 Reference: Chart Patterns, Signals & Success Rates"):
+                            st.markdown("### 🏆 Highest Success Patterns")
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("Inv. Head & Shoulders", "89% Success", "Bullish Reversal")
+                            c2.metric("Double Bottom", "88% Success", "Bullish Reversal")
+                            c3.metric("Desc. Triangle", "87% Success", "Bearish Breakout")
+                            
+                            st.markdown("---")
+                            st.markdown("### 📊 Comprehensive Pattern Guide")
+                            
+                            tab_trend, tab_reverse, tab_cont = st.tabs(["Trend Patterns", "Reversal Patterns", "Continuation Patterns"])
+                            
+                            with tab_trend:
+                                st.markdown("""
+                                **1. Ascending Staircase** (Uptrend)  
+                                * **Signal:** :green[**BUY / HOLD**]  
+                                * **Action:** Buy pullbacks to support. Hold while trendline holds.  
+                                
+                                **2. Descending Staircase** (Downtrend)  
+                                * **Signal:** :red[**SELL**]  
+                                * **Action:** Sell rallies to resistance. Avoid long positions.
+                                """)
+                                
+                            with tab_reverse:
+                                st.markdown("""
+                                **3. Double Top ('M' Shape)** * **Signal:** :red[**SELL**]  
+                                * **Trigger:** Price breaks BELOW the neckline (valley).
+                                
+                                **4. Double Bottom ('W' Shape)** * **Signal:** :green[**BUY**]  
+                                * **Trigger:** Price breaks ABOVE the neckline (peak).
+                                
+                                **5. Head & Shoulders** * **Signal:** :red[**SELL**] (Top) | :green[**BUY**] (Inverse/Bottom)  
+                                * **Trigger:** Break of the neckline.
+                                
+                                **6. Rising Wedge** * **Signal:** :red[**SELL**] (Bearish Reversal)  
+                                * **Trigger:** Break below lower trendline.
+                                
+                                **7. Falling Wedge** * **Signal:** :green[**BUY**] (Bullish Reversal)  
+                                * **Trigger:** Break above upper trendline.
+                                
+                                **8. Rounded Top/Bottom** * **Signal:** :red[**SELL**] (Top) | :green[**BUY**] (Bottom)  
+                                * **Trigger:** Break of support (top) or resistance (bottom).
+                                """)
+                                
+                            with tab_cont:
+                                st.markdown("""
+                                **9. Ascending Triangle** * **Signal:** :green[**BUY**]  
+                                * **Trigger:** Break above flat resistance line.
+                                
+                                **10. Descending Triangle** * **Signal:** :red[**SELL**]  
+                                * **Trigger:** Break below flat support line.
+                                
+                                **11. Flag (Bull/Bear)** * **Signal:** :green[**BUY**] (Bull) | :red[**SELL**] (Bear)  
+                                * **Trigger:** Breakout from the channel in direction of the pole.
+                                
+                                **12. Cup and Handle** * **Signal:** :green[**BUY**]  
+                                * **Trigger:** Breakout above the handle's upper trendline.
+                                """)
+
                         st.markdown("---")
 
+                        # Standard Tabs
                         tabs = st.tabs(["Chart", "Fundamentals", "Financials", "News"])
                         
                         with tabs[0]: 
