@@ -399,7 +399,7 @@ if page == "Global Headlines":
 
 elif page == "Market Scanner":
     st.title("⚡ S&P 500 Market Scanner")
-    st.markdown("Scanning stocks for extreme RSI conditions (Filtered by Market Cap > $10M)...")
+    st.markdown("Scanning stocks for extreme RSI conditions (Filtered by Market Cap > $100M)...")
     
     # --- REFRESH BUTTON ---
     if st.button("🔄 Refresh Data"):
