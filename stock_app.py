@@ -414,7 +414,13 @@ elif page == "Stock Analyst Pro":
                                 st.caption("Visual Examples of Bearish Reversals & Breakdowns:")
                                 
 
-[Image of bullish and bearish stock chart patterns]
+import streamlit as st # Ensure this is imported at the top
+
+# Option A: If you have the image file saved locally
+st.image("path/to/chart_patterns.png", caption="Bullish and Bearish Chart Patterns")
+
+# Option B: If you want to use a URL (example)
+st.image("https://example.com/stock-patterns.jpg", caption="Bullish and Bearish Chart Patterns")
 
 
                             with t_con:
