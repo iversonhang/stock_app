@@ -26,9 +26,6 @@ st.markdown("""
         background-color: #f0f2f6; color: #31333F; padding: 2px 8px; border-radius: 4px; 
         font-size: 12px; font-weight: bold; border: 1px solid #d6d6d6; margin-right: 8px;
     }
-    .pattern-card {
-        padding: 10px; border: 1px solid #eee; border-radius: 5px; margin-bottom: 10px;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -107,11 +104,10 @@ def analyze_chart_with_gemini(ticker, df, api_key, model_name):
     if not api_key or df is None: return None
     latest = df.iloc[-1]
     
-    # Extract Price Sequence (Last 15 Weeks) to help AI "see" the shape
     weekly_df = df.resample('W').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).tail(15)
     price_sequence = ""
     for date, row in weekly_df.iterrows():
-        price_sequence += f"Week {date.strftime('%Y-%m-%d')}: High {row['High']:.2f}, Low {row['Low']:.2f}, Close {row['Close']:.2f}\n"
+        price_sequence += f"Week {date.strftime('%Y-%m-%d')}: H {row['High']:.2f}, L {row['Low']:.2f}, C {row['Close']:.2f}\n"
 
     tech_data = f"""
     Ticker: {ticker}
@@ -122,7 +118,7 @@ def analyze_chart_with_gemini(ticker, df, api_key, model_name):
     SMA 200: {latest['SMA200']:.2f}
     Trend: {"Above" if latest['Close'] > latest['SMA200'] else "Below"} 200 SMA
     
-    Recent Weekly Price Action (Use this to visualize the shape):
+    Recent Weekly Prices:
     {price_sequence}
     """
 
@@ -130,31 +126,25 @@ def analyze_chart_with_gemini(ticker, df, api_key, model_name):
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
         
+        # --- FIXED PROMPT TO PREVENT "VERDICT: VERDICT" ---
         prompt = f"""
-        Act as a professional technical chartist. Analyze the provided price action and technicals for {ticker}.
+        Act as a professional technical chartist for {ticker}.
         
         {tech_data}
         
-        Your Goal: Identify if any of the following 11 patterns are forming or completing. 
-        
-        Reference for Patterns:
-        1. Ascending/Descending Staircases (Trend)
+        Check for these patterns:
+        1. Ascending/Descending Staircases
         2. Ascending/Descending/Symmetrical Triangles
-        3. Bull/Bear Flags
-        4. Rising/Falling Wedges
-        5. Double Top/Bottom
-        6. Head and Shoulders (or Inverse)
-        7. Rounded Top/Bottom
-        8. Cup and Handle
-
-        Instructions:
-        1. Analyze the "Recent Weekly Price Action" numbers to visualize the shape (peaks and troughs).
-        2. Determine the most likely pattern from the list above.
-        3. Provide a VERDICT: BUY, SELL, or HOLD.
-        4. Provide REASONING: Mention the pattern identified, the breakout status, and why it supports the verdict.
+        3. Bull/Bear Flags or Wedges
+        4. Double Top/Bottom
+        5. Head and Shoulders
+        6. Cup and Handle
 
         Output strictly in this format: 
-        VERDICT ||| Pattern Name: [Name] - [Reasoning]
+        SIGNAL ||| Pattern Name: [Name] - [Reasoning]
+        
+        Important: Replace [SIGNAL] with BUY, SELL, or HOLD.
+        Example: BUY ||| Bull Flag - Price broke out of channel...
         """
         
         response = model.generate_content(prompt)
@@ -162,7 +152,19 @@ def analyze_chart_with_gemini(ticker, df, api_key, model_name):
         
         if "|||" in text:
             parts = text.split("|||")
-            return {"signal": parts[0].strip().upper(), "reason": parts[1].strip()}
+            
+            # --- ROBUST PARSING FIX ---
+            # 1. Take the first part
+            raw_sig = parts[0].strip().upper()
+            # 2. Remove "VERDICT" or "SIGNAL" if the AI mistakenly wrote it
+            raw_sig = raw_sig.replace("VERDICT", "").replace("SIGNAL", "").replace(":", "").strip()
+            
+            # 3. Normalize to standard keywords
+            if "BUY" in raw_sig: final_sig = "BUY"
+            elif "SELL" in raw_sig: final_sig = "SELL"
+            else: final_sig = "HOLD"
+            
+            return {"signal": final_sig, "reason": parts[1].strip()}
         else:
             return {"signal": "HOLD", "reason": text}
             
@@ -200,7 +202,7 @@ def summarize_news_with_gemini(news_items, api_key, model_name):
         Analyze headlines. 
         1. Summarize in 2 sentences. 
         2. Assign signal (BUY, SELL, HOLD). 
-        3. Identify the primary Ticker (e.g. AAPL, TSLA, BTC). If general news, use "MARKET".
+        3. Identify the primary Ticker (e.g. AAPL). If general, use "MARKET".
         
         Format: Summary %% SIGNAL %% TICKER
         Separator: |||
@@ -250,7 +252,6 @@ if api_key:
 
 page = st.sidebar.radio("Go to", ["Global Headlines", "Stock Analyst Pro"])
 
-# --- PAGE 1: GLOBAL HEADLINES ---
 if page == "Global Headlines":
     st.title("🌍 Global Financial Headlines")
     
@@ -296,7 +297,6 @@ if page == "Global Headlines":
                     st.write(item.get('summary', ''))
                     st.markdown(f"[Read More]({item['link']})")
 
-# --- PAGE 2: STOCK ANALYST PRO ---
 elif page == "Stock Analyst Pro":
     st.title("🔎 Stock Technical Analyzer")
     query = st.text_input("Search Ticker:")
@@ -338,7 +338,7 @@ elif page == "Stock Analyst Pro":
                         elif not api_key:
                             st.warning("Enter API Key in sidebar to unlock Pattern Recognition.")
 
-                        # --- NEW: CHART PATTERN REFERENCE GUIDE ---
+                        # --- REFERENCE GUIDE ---
                         with st.expander("📘 Reference: Chart Patterns, Signals & Success Rates"):
                             st.markdown("### 🏆 Highest Success Patterns")
                             c1, c2, c3 = st.columns(3)
