@@ -94,27 +94,49 @@ def summarize_with_gemini(news_items, api_key, model_name):
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
         
-        prompt = "Here are financial news headlines. Summarize each one into exactly 2 professional sentences for an investor. Return them separated by '|||'.\n\n"
+        # --- PROMPT ENGINEERING FOR SIGNALS ---
+        prompt = """
+        Analyze the following financial news headlines. For each one:
+        1. Write a 2-sentence summary for an investor.
+        2. Assign a one-word signal: "BUY" (if news is positive/bullish), "SELL" (if news is negative/bearish), or "HOLD" (if news is neutral or informational).
+        
+        Return the output strictly in this format: 
+        Summary text... %% SIGNAL
+        
+        Separate each news item with '|||'.
+        """
+        
         for item in news_items:
-            prompt += f"Headline: {item['title']}\nContext: {item['raw_desc']}\n\n"
+            prompt += f"\nHeadline: {item['title']}\nContext: {item['raw_desc']}\n"
 
         response = model.generate_content(prompt)
-        summaries = response.text.split('|||')
+        
+        # Parse Response
+        raw_responses = response.text.split('|||')
         
         for i, item in enumerate(news_items):
-            if i < len(summaries):
-                cleaned = summaries[i].strip().replace('**', '').replace('Headline:', '').strip()
-                item['summary'] = cleaned
+            if i < len(raw_responses):
+                full_text = raw_responses[i].strip()
+                # Split Summary and Signal
+                if "%%" in full_text:
+                    parts = full_text.split("%%")
+                    item['summary'] = parts[0].strip()
+                    item['signal'] = parts[1].strip().upper() # Force uppercase
+                else:
+                    item['summary'] = full_text
+                    item['signal'] = "HOLD" # Default
             else:
                 item['summary'] = item['raw_desc']
+                item['signal'] = "HOLD"
                 
     except Exception as e:
         for item in news_items:
             item['summary'] = f"AI Error: {item['raw_desc']}"
+            item['signal'] = "HOLD"
             
     return news_items
 
-# --- SIDEBAR CONFIG (DYNAMIC MODEL LIST) ---
+# --- SIDEBAR CONFIG ---
 st.sidebar.title("Configuration")
 
 # 1. API Key Input
@@ -124,33 +146,17 @@ st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
 # 2. Dynamic Model Selection
-selected_model = "gemini-1.5-flash" # Default fallback
+selected_model = "gemini-1.5-flash" 
 
 if api_key:
     try:
         genai.configure(api_key=api_key)
-        # Fetch list of models
         models = genai.list_models()
-        
-        # Filter for models that support content generation
         model_options = [m.name.replace("models/", "") for m in models if "generateContent" in m.supported_generation_methods]
-        
-        # Sort so newer/popular models might appear (optional)
         model_options.sort()
-        
         if model_options:
-            selected_model = st.sidebar.selectbox(
-                "Choose AI Model", 
-                model_options, 
-                index=model_options.index("gemini-1.5-flash") if "gemini-1.5-flash" in model_options else 0
-            )
-        else:
-            st.sidebar.warning("No generative models found for this key.")
-            
-    except Exception as e:
-        st.sidebar.error("Invalid API Key or Connection Error")
-else:
-    st.sidebar.info("Enter API Key to load available models.")
+            selected_model = st.sidebar.selectbox("Choose AI Model", model_options, index=0)
+    except: pass
 
 # --- MAIN PAGE LAYOUT ---
 
@@ -186,10 +192,10 @@ if page == "Global Headlines":
     st.markdown("---")
 
     # News Section
-    st.subheader(f"AI-Powered News Briefs ({selected_model})")
+    st.subheader(f"AI Market Signals ({selected_model})")
     
     if not api_key:
-        st.warning("⚠️ Please enter your Gemini API Key in the sidebar to enable AI summaries.")
+        st.warning("⚠️ Enter Gemini API Key to see Buy/Sell/Hold signals.")
         with st.spinner("Fetching news..."):
             raw_news = fetch_rss_feed()
             for item in raw_news:
@@ -197,18 +203,28 @@ if page == "Global Headlines":
                     st.write(item['raw_desc'])
                     st.markdown(f"[Read Source]({item['link']})")
     else:
-        with st.spinner(f"🤖 Gemini ({selected_model}) is analyzing the market..."):
+        st.caption("Disclaimer: Signals are AI-generated based on news sentiment and are NOT financial advice.")
+        with st.spinner(f"🤖 Analyzing market sentiment..."):
             raw_items = fetch_rss_feed()
             ai_news = summarize_with_gemini(raw_items, api_key, selected_model)
             
             for item in ai_news:
                 summary = item.get('summary', item['raw_desc'])
+                signal = item.get('signal', 'HOLD').replace("**", "").strip() # Clean formatting
+                
+                # Signal Color Logic
+                color = "grey"
+                if "BUY" in signal: color = "green"
+                elif "SELL" in signal: color = "red"
+                
                 try: 
                     dt = parsedate_to_datetime(item['pub_date']).strftime("%H:%M")
                 except: dt = ""
                 
+                # Display Headline with colored signal tag
                 with st.expander(f"🕒 {dt} | {item['title']}"):
-                    st.markdown(f"**AI Summary:** {summary}")
+                    st.markdown(f"**AI Sentiment:** :{color}[**{signal}**]")
+                    st.write(summary)
                     st.markdown(f"👉 [Read full article]({item['link']})")
 
 elif page == "Stock Analyst Pro":
