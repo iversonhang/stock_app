@@ -125,7 +125,13 @@ def analyze_chart_with_gemini(ticker, df, api_key, model_name):
 
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
+       # --- FIX: Set Temperature to 0 for Deterministic Results ---
+        generation_config = genai.GenerationConfig(
+            temperature=0.0
+        )
+        
+        model = genai.GenerativeModel(model_name, generation_config=generation_config)
+        
         prompt = f"""
         Act as a technical analyst for {ticker}.
         {tech_data}
@@ -172,7 +178,12 @@ def summarize_news_with_gemini(news_items, api_key, model_name):
     if not api_key: return news_items 
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
+        # --- FIX: Set Temperature to 0 for Deterministic Results ---
+        generation_config = genai.GenerationConfig(
+            temperature=0.0
+        )
+        
+        model = genai.GenerativeModel(model_name, generation_config=generation_config)
         prompt = """
         Analyze headlines. 
         1. Summarize in 2 sentences. 
@@ -216,7 +227,7 @@ st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
 # --- UPDATED MODEL SELECTION LOGIC ---
-default_model_name = "gemini-flash-lite-latest"
+default_model_name = "gemini-flash-latest"
 selected_model = default_model_name
 
 if api_key:
