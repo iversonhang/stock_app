@@ -92,29 +92,105 @@ def format_number(num):
         return f"{num:.2f}"
     return "N/A"
 
+# --- MARKET SCANNER FUNCTIONS (OPTIMIZED WITH FILTER) ---
+
+@st.cache_data(ttl=3600)
+def get_sp500_tickers():
+    try:
+        url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+        tables = pd.read_html(url)
+        df = tables[0]
+        return df['Symbol'].tolist()
+    except:
+        return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK.B', 'V', 'JNJ']
+
+@st.cache_data(ttl=3600)
+def get_market_scanner_data():
+    tickers = get_sp500_tickers()
+    
+    # 1. BATCH DOWNLOAD PRICES (Fast)
+    data = yf.download(tickers, period="3mo", interval="1d", group_by='ticker', threads=True)
+    
+    rsi_candidates = []
+    
+    # 2. CALCULATE RSI FOR ALL
+    for ticker in tickers:
+        try:
+            if isinstance(data.columns, pd.MultiIndex):
+                if ticker in data.columns.get_level_values(0):
+                    df = data[ticker].copy()
+                else: continue
+            else:
+                df = data
+            
+            if len(df) < 15: continue
+            
+            # RSI Calculation
+            delta = df['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            df['RSI'] = 100 - (100 / (1 + rs))
+            
+            latest_rsi = df['RSI'].iloc[-1]
+            latest_price = df['Close'].iloc[-1]
+            
+            if not pd.isna(latest_rsi):
+                rsi_candidates.append({
+                    "Ticker": ticker,
+                    "Price": latest_price,
+                    "RSI": latest_rsi
+                })
+        except: continue
+            
+    # 3. FILTER LOGIC (Lazy Loading Market Cap)
+    # We sort FIRST, then verify Market Cap > 1B only for top results to save time.
+    
+    def get_verified_list(candidates, ascending=True):
+        # Sort by RSI (Ascending for Oversold, Descending for Overbought)
+        sorted_list = sorted(candidates, key=lambda x: x['RSI'], reverse=not ascending)
+        
+        verified = []
+        for item in sorted_list:
+            if len(verified) >= 10: break # Stop once we have 10 valid stocks
+            
+            try:
+                # Fetch Market Cap (Slow Operation)
+                info = yf.Ticker(item['Ticker']).info
+                mkt_cap = info.get('marketCap', 0)
+                
+                # CHECK: Market Cap > 1 Billion
+                if mkt_cap > 1_000_000_000:
+                    item['MarketCap'] = mkt_cap
+                    verified.append(item)
+            except:
+                continue
+        return pd.DataFrame(verified)
+
+    oversold_df = get_verified_list(rsi_candidates, ascending=True)
+    overbought_df = get_verified_list(rsi_candidates, ascending=False)
+    
+    return oversold_df, overbought_df
+
 # --- TECHNICAL ANALYSIS FUNCTIONS ---
 
 def calculate_technicals(df):
     if len(df) < 50: return None 
     
-    # 1. Moving Averages
     df['SMA50'] = df['Close'].rolling(window=50).mean()
     df['SMA200'] = df['Close'].rolling(window=200).mean()
     
-    # 2. RSI
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
     
-    # 3. MACD
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = ema12 - ema26
     df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
 
-    # 4. KDJ Indicator
     low_min = df['Low'].rolling(window=9).min()
     high_max = df['High'].rolling(window=9).max()
     rsv = (df['Close'] - low_min) / (high_max - low_min) * 100
@@ -124,14 +200,10 @@ def calculate_technicals(df):
     
     return df
 
-# --- IMPORTANT: CACHING ADDED HERE ---
-# ttl=3600 means we only run this ONCE per hour per ticker.
-# We pass 'latest_date' to ensure the cache is based on specific data snapshots.
 @st.cache_data(ttl=3600, show_spinner=False)
 def analyze_chart_with_gemini_cached(ticker, _df_monthly_summary, _latest_indicators, api_key, model_name):
     if not api_key: return None
 
-    # Reconstruct text data from the passed summaries (to be cache-friendly)
     price_sequence = _df_monthly_summary
     
     tech_data = f"""
@@ -144,8 +216,6 @@ def analyze_chart_with_gemini_cached(ticker, _df_monthly_summary, _latest_indica
 
     try:
         genai.configure(api_key=api_key)
-        
-        # Temperature 0.0 for stability
         generation_config = genai.GenerationConfig(temperature=0.0, response_mime_type="application/json")
         model = genai.GenerativeModel(model_name, generation_config=generation_config)
         
@@ -245,19 +315,16 @@ def summarize_news_with_gemini(news_items, api_key, model_name):
 # --- SIDEBAR ---
 st.sidebar.title("Configuration")
 
-# Check if the key exists in Streamlit Secrets
 if "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
     st.sidebar.success("✅ API Key loaded from Secrets")
 else:
-    # Fallback to manual input
     api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
     
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-# --- MODEL SELECTION ---
-default_model_name = "gemini-flash-latest"
+default_model_name = "gemini-flash-lite-latest"
 selected_model = default_model_name
 
 if api_key:
@@ -273,8 +340,8 @@ if api_key:
 
 # --- MAIN LAYOUT ---
 
-# Linked to session state
-page = st.sidebar.radio("Go to", ["Global Headlines", "Stock Analyst Pro"], key="navigation")
+# Navigation Menu
+page = st.sidebar.radio("Go to", ["Global Headlines", "Market Scanner", "Stock Analyst Pro"], key="navigation")
 
 if page == "Global Headlines":
     st.title("🌍 Global Financial Headlines")
@@ -323,6 +390,39 @@ if page == "Global Headlines":
                           st.markdown(f"<span style='color:{col}; font-weight:bold; font-size:1.1em;'>{sig}</span>", unsafe_allow_html=True)
                     st.write(item.get('summary', ''))
                     st.markdown(f"[Read More]({item['link']})")
+
+elif page == "Market Scanner":
+    st.title("⚡ S&P 500 Market Scanner")
+    st.markdown("Scanning 500+ stocks for extreme RSI conditions (Filtered by Market Cap > $1B)...")
+    
+    with st.spinner("Batch processing S&P 500 data... (this runs once per hour)"):
+        oversold_df, overbought_df = get_market_scanner_data()
+        
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        st.subheader("🟢 Top 10 Oversold (Buy Candidates)")
+        st.caption("RSI < 30 indicates the stock may be undervalued.")
+        if not oversold_df.empty:
+            for i, row in oversold_df.iterrows():
+                with st.expander(f"**{row['Ticker']}** | RSI: {row['RSI']:.1f}"):
+                    st.write(f"Price: ${row['Price']:.2f}")
+                    st.write(f"Market Cap: {format_number(row.get('MarketCap', 0))}")
+                    st.button(f"Analyze {row['Ticker']}", key=f"os_{i}", on_click=go_to_ticker, args=(row['Ticker'],))
+        else:
+            st.info("No oversold stocks found right now.")
+
+    with c2:
+        st.subheader("🔴 Top 10 Overbought (Sell Candidates)")
+        st.caption("RSI > 70 indicates the stock may be overvalued.")
+        if not overbought_df.empty:
+            for i, row in overbought_df.iterrows():
+                with st.expander(f"**{row['Ticker']}** | RSI: {row['RSI']:.1f}"):
+                    st.write(f"Price: ${row['Price']:.2f}")
+                    st.write(f"Market Cap: {format_number(row.get('MarketCap', 0))}")
+                    st.button(f"Analyze {row['Ticker']}", key=f"ob_{i}", on_click=go_to_ticker, args=(row['Ticker'],))
+        else:
+            st.info("No overbought stocks found right now.")
 
 elif page == "Stock Analyst Pro":
     st.title("🔎 Stock Technical Analyzer")
@@ -376,7 +476,6 @@ elif page == "Stock Analyst Pro":
 
                     if api_key and df_tech is not None:
                         # --- PREPARE DATA FOR CACHED FUNCTION ---
-                        # We separate data preparation from the API call to make the cache effective
                         latest = df_tech.iloc[-1]
                         monthly_df = df_tech.resample('M').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).tail(24)
                         
@@ -430,6 +529,10 @@ elif page == "Stock Analyst Pro":
                             
                             with t_rev:
                                 st.markdown("#### Reversal Patterns")
+                                
+
+[Image of head and shoulders stock pattern diagram]
+
                                 rev_cols = st.columns(2)
                                 with rev_cols[0]:
                                     st.markdown("##### 🟢 Bullish (Buy)")
@@ -454,6 +557,10 @@ elif page == "Stock Analyst Pro":
 
                             with t_con:
                                 st.markdown("#### Continuation Patterns")
+                                
+
+[Image of bullish flag chart pattern]
+
                                 con_cols = st.columns(2)
                                 with con_cols[0]:
                                     st.markdown("##### 🟢 Bullish")
