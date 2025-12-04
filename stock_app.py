@@ -51,7 +51,7 @@ def search_symbol(query):
     try:
         url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=10&newsCount=0"
         headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=5)
         data = response.json()
         results = []
         if 'quotes' in data:
@@ -154,7 +154,7 @@ def fetch_rss_feed():
     try:
         url = "https://finance.yahoo.com/news/rssindex"
         headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=5)
         root = ET.fromstring(response.content)
         for item in root.findall('./channel/item')[:10]: 
             title = item.find('title').text
@@ -370,7 +370,7 @@ elif page == "Stock Analyst Pro":
                                             return " ✅ MATCH"
                                     elif "cup" in pat_lower:
                                          if "cup" in reason_text and "inv" not in reason_text:
-                                             return " ✅ MATCH"
+                                              return " ✅ MATCH"
                                     
                                     # Fallback simple match
                                     elif pat_lower in reason_text:
@@ -413,7 +413,7 @@ elif page == "Stock Analyst Pro":
                                     """)
                                 st.caption("Visual Examples of Bearish Reversals & Breakdowns:")
 
-                        with t_con:
+                            with t_con:
                                 st.markdown("#### Continuation Patterns (Mid-Trend Pauses)")
                                 st.info("ℹ️ **Strategy:** These are pauses in an existing trend. Trade in the direction of the prior trend.")
                                 con_cols = st.columns(2)
