@@ -269,10 +269,63 @@ def analyze_chart_with_gemini_cached(ticker, _df_monthly_summary, _latest_indica
     except Exception as e:
         return {"signal": "ERROR", "reason": str(e), "lines": []}
 
+# --- MISSING FUNCTIONS RESTORED ---
+
+def fetch_rss_feed():
+    items = []
+    try:
+        url = "https://finance.yahoo.com/news/rssindex"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=5)
+        root = ET.fromstring(response.content)
+        for item in root.findall('./channel/item')[:10]: 
+            title = item.find('title').text
+            link = item.find('link').text
+            pub_date = item.find('pubDate').text
+            description = item.find('description').text if item.find('description') is not None else ""
+            if description:
+                soup = BeautifulSoup(description, 'html.parser')
+                description = soup.get_text().strip()
+            items.append({'title': title, 'link': link, 'pub_date': pub_date, 'raw_desc': description})
+    except: return []
+    return items
+
+def summarize_news_with_gemini(news_items, api_key, model_name):
+    if not api_key: return news_items 
+    try:
+        genai.configure(api_key=api_key)
+        generation_config = genai.GenerationConfig(temperature=0.0)
+        model = genai.GenerativeModel(model_name, generation_config=generation_config)
+        prompt = """
+        Analyze headlines. 
+        1. Summarize in 2 sentences. 
+        2. Assign signal (BUY, SELL, HOLD). 
+        3. Identify the primary Ticker (e.g. AAPL). If general/market-wide, use "MARKET".
+        Format: Summary %% SIGNAL %% TICKER
+        Separator: |||
+        """
+        input_text = ""
+        for item in news_items: input_text += f"Head: {item['title']}\nCtx: {item['raw_desc']}\n"
+        response = model.generate_content(prompt + "\n\n" + input_text)
+        res_list = response.text.split('|||')
+        for i, item in enumerate(news_items):
+            if i < len(res_list):
+                txt = res_list[i].strip()
+                if "%%" in txt:
+                    parts = txt.split("%%")
+                    item['summary'] = parts[0].strip()
+                    item['signal'] = parts[1].strip().upper()
+                    if len(parts) > 2: item['ticker'] = parts[2].strip().upper()
+                    else: item['ticker'] = "MARKET"
+                else:
+                    item['summary'] = txt
+                    item['signal'] = "HOLD"
+                    item['ticker'] = "NEWS"
+    except: pass
+    return news_items
+
 # --- HELPER FOR SCANNER ANALYSIS ---
 def get_quick_analysis(ticker, api_key, model_name):
-    # Fetches separate 2y history to match the main analyst behavior
-    # This ensures consistency between the scanner tag and the detail view
     try:
         hist = yf.Ticker(ticker).history(period='2y')
         df = calculate_technicals(hist)
@@ -397,13 +450,11 @@ elif page == "Market Scanner":
                     res = get_quick_analysis(row['Ticker'], api_key, selected_model)
                     if res:
                         s = res.get('signal', 'HOLD')
-                        # Styled HTML Tag
                         css_class = "tag-buy" if "BUY" in s else "tag-sell" if "SELL" in s else "tag-hold"
                         ai_tag = f'<span class="{css_class}">{s}</span>'
                 # ------------------------
 
                 with st.expander(f"**{row['Ticker']}** | RSI: {row['RSI']:.1f}"):
-                    # Display the Verdict Tag right here
                     if ai_tag:
                         st.markdown(f"**AI Verdict:** {ai_tag}", unsafe_allow_html=True)
                     
