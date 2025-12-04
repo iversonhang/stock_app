@@ -324,7 +324,7 @@ else:
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-default_model_name = "gemini-flash-lite-latest"
+default_model_name = "gemini-flash-latest"
 selected_model = default_model_name
 
 if api_key:
@@ -529,10 +529,6 @@ elif page == "Stock Analyst Pro":
                             
                             with t_rev:
                                 st.markdown("#### Reversal Patterns")
-                                
-
-[Image of head and shoulders stock pattern diagram]
-
                                 rev_cols = st.columns(2)
                                 with rev_cols[0]:
                                     st.markdown("##### 🟢 Bullish (Buy)")
@@ -557,10 +553,6 @@ elif page == "Stock Analyst Pro":
 
                             with t_con:
                                 st.markdown("#### Continuation Patterns")
-                                
-
-[Image of bullish flag chart pattern]
-
                                 con_cols = st.columns(2)
                                 with con_cols[0]:
                                     st.markdown("##### 🟢 Bullish")
