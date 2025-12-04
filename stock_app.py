@@ -92,7 +92,7 @@ def format_number(num):
         return f"{num:.2f}"
     return "N/A"
 
-# --- MARKET SCANNER FUNCTIONS (OPTIMIZED WITH FILTER) ---
+# --- MARKET SCANNER FUNCTIONS ---
 
 @st.cache_data(ttl=3600)
 def get_sp500_tickers():
@@ -108,12 +108,12 @@ def get_sp500_tickers():
 def get_market_scanner_data():
     tickers = get_sp500_tickers()
     
-    # 1. BATCH DOWNLOAD PRICES (Fast)
+    # 1. BATCH DOWNLOAD PRICES
     data = yf.download(tickers, period="3mo", interval="1d", group_by='ticker', threads=True)
     
     rsi_candidates = []
     
-    # 2. CALCULATE RSI FOR ALL
+    # 2. CALCULATE RSI
     for ticker in tickers:
         try:
             if isinstance(data.columns, pd.MultiIndex):
@@ -125,7 +125,7 @@ def get_market_scanner_data():
             
             if len(df) < 15: continue
             
-            # RSI Calculation
+            # RSI Calc
             delta = df['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -143,24 +143,24 @@ def get_market_scanner_data():
                 })
         except: continue
             
-    # 3. FILTER LOGIC (Lazy Loading Market Cap)
-    # We sort FIRST, then verify Market Cap > 1B only for top results to save time.
+    # 3. FILTER LOGIC (Updated to > 10M)
     
     def get_verified_list(candidates, ascending=True):
-        # Sort by RSI (Ascending for Oversold, Descending for Overbought)
+        # Sort by RSI first
         sorted_list = sorted(candidates, key=lambda x: x['RSI'], reverse=not ascending)
         
         verified = []
         for item in sorted_list:
-            if len(verified) >= 10: break # Stop once we have 10 valid stocks
+            if len(verified) >= 10: break 
             
             try:
-                # Fetch Market Cap (Slow Operation)
+                # Fetch Market Cap
                 info = yf.Ticker(item['Ticker']).info
-                mkt_cap = info.get('marketCap', 0)
+                # Use .get(key, 0) or 0 to handle cases where marketCap is None
+                mkt_cap = info.get('marketCap', 0) or 0
                 
-                # CHECK: Market Cap > 1 Billion
-                if mkt_cap > 1_000_000_000:
+                # --- CHANGED: Filter > 10 Million ---
+                if mkt_cap > 10_000_000:
                     item['MarketCap'] = mkt_cap
                     verified.append(item)
             except:
@@ -324,7 +324,7 @@ else:
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-default_model_name = "gemini-flash-latest"
+default_model_name = "gemini-flash-lite-latest"
 selected_model = default_model_name
 
 if api_key:
@@ -393,7 +393,7 @@ if page == "Global Headlines":
 
 elif page == "Market Scanner":
     st.title("⚡ S&P 500 Market Scanner")
-    st.markdown("Scanning 500+ stocks for extreme RSI conditions (Filtered by Market Cap > $1B)...")
+    st.markdown("Scanning stocks for extreme RSI conditions (Filtered by Market Cap > $10M)...")
     
     with st.spinner("Batch processing S&P 500 data... (this runs once per hour)"):
         oversold_df, overbought_df = get_market_scanner_data()
@@ -529,6 +529,10 @@ elif page == "Stock Analyst Pro":
                             
                             with t_rev:
                                 st.markdown("#### Reversal Patterns")
+                                
+
+[Image of head and shoulders stock pattern diagram]
+
                                 rev_cols = st.columns(2)
                                 with rev_cols[0]:
                                     st.markdown("##### 🟢 Bullish (Buy)")
@@ -553,6 +557,10 @@ elif page == "Stock Analyst Pro":
 
                             with t_con:
                                 st.markdown("#### Continuation Patterns")
+                                
+
+[Image of bullish flag chart pattern]
+
                                 con_cols = st.columns(2)
                                 with con_cols[0]:
                                     st.markdown("##### 🟢 Bullish")
