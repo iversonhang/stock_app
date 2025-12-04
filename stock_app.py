@@ -330,7 +330,7 @@ else:
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-default_model_name = "gemini-flash-lite-latest"
+default_model_name = "gemini-flash-latest"
 selected_model = default_model_name
 
 if api_key:
