@@ -356,12 +356,69 @@ elif page == "Stock Analyst Pro":
                             c1.metric("Inv. Head & Shoulders", "89% Success", "Bullish Reversal")
                             c2.metric("Double Bottom", "88% Success", "Bullish Reversal")
                             c3.metric("Desc. Triangle", "87% Success", "Bearish Breakout")
+                            
                             st.markdown("---")
                             st.markdown("### 📊 Comprehensive Pattern Guide")
-                            t_tr, t_rev, t_con = st.tabs(["Trend", "Reversal", "Continuation"])
-                            with t_tr: st.write("Staircases (Trend)")
-                            with t_rev: st.write("Double Top/Bottom, Head & Shoulders, Wedges, Rounded Top/Bottom")
-                            with t_con: st.write("Triangles, Flags, Cup & Handle")
+                            
+                            t_rev, t_con, t_tr = st.tabs(["🔄 Reversal (Tops/Bottoms)", "➡️ Continuation (Flags/Wedges)", "📈 Trend (Channels)"])
+                            
+                            with t_rev:
+                                st.markdown("#### Reversal Patterns (Trend Changes)")
+                                st.info("ℹ️ **Strategy:** Wait for the 'Neckline' break. Do not anticipate the pattern before it completes.")
+                                rev_cols = st.columns(2)
+                                with rev_cols[0]:
+                                    st.markdown("##### 🟢 Bullish (Buy Signals)")
+                                    st.markdown("""
+                                    | Pattern | Action | Trigger Point |
+                                    | :--- | :--- | :--- |
+                                    | **Inv. Head & Shoulders** | **BUY** | Break above Neckline |
+                                    | **Double Bottom** | **BUY** | Break above Resistance (W shape) |
+                                    | **Falling Wedge** | **BUY** | Break above Upper Trendline |
+                                    """)
+                                with rev_cols[1]:
+                                    st.markdown("##### 🔴 Bearish (Sell Signals)")
+                                    st.markdown("""
+                                    | Pattern | Action | Trigger Point |
+                                    | :--- | :--- | :--- |
+                                    | **Head & Shoulders** | **SELL** | Break below Neckline |
+                                    | **Double Top** | **SELL** | Break below Support (M shape) |
+                                    | **Rising Wedge** | **SELL** | Break below Lower Trendline |
+                                    """)
+
+                            with t_con:
+                                st.markdown("#### Continuation Patterns (Mid-Trend Pauses)")
+                                st.info("ℹ️ **Strategy:** These are pauses in an existing trend. Trade in the direction of the prior trend.")
+                                con_cols = st.columns(2)
+                                with con_cols[0]:
+                                    st.markdown("##### 🟢 Bullish Setup")
+                                    st.markdown("""
+                                    | Pattern | Action | Trigger Point |
+                                    | :--- | :--- | :--- |
+                                    | **Bull Flag** | **BUY** | Break above the flag's upper slope |
+                                    | **Cup & Handle** | **BUY** | Break above the rim/handle resistance |
+                                    | **Ascending Triangle** | **BUY** | Break above flat top resistance |
+                                    """)
+                                with con_cols[1]:
+                                    st.markdown("##### 🔴 Bearish Setup")
+                                    st.markdown("""
+                                    | Pattern | Action | Trigger Point |
+                                    | :--- | :--- | :--- |
+                                    | **Bear Flag** | **SELL** | Break below the flag's lower slope |
+                                    | **Inv. Cup & Handle** | **SELL** | Break below the rim support |
+                                    | **Descending Triangle** | **SELL** | Break below flat bottom support |
+                                    """)
+
+                            with t_tr:
+                                st.markdown("#### Trend Trading (Staircases)")
+                                st.warning("⚠️ **Rule:** The trend is your friend until the bend at the end.")
+                                st.markdown("""
+                                - **Uptrend (Higher Highs, Higher Lows):** - **BUY** at the support trendline (the "floor").
+                                    - **HOLD** while price is between lines.
+                                    - **SELL** if price breaks *below* the support line.
+                                - **Downtrend (Lower Highs, Lower Lows):**
+                                    - **SELL/SHORT** at the resistance trendline (the "ceiling").
+                                    - **Wait** if price is in the middle.
+                                """)
 
                     st.markdown("---")
 
