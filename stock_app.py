@@ -114,15 +114,9 @@ def calculate_technicals(df):
     df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
 
     # 4. KDJ Indicator (Stochastic Oscillator)
-    # KDJ requires the Lowest Low and Highest High over a 9-day window
     low_min = df['Low'].rolling(window=9).min()
     high_max = df['High'].rolling(window=9).max()
-    
-    # RSV (Raw Stochastic Value)
     rsv = (df['Close'] - low_min) / (high_max - low_min) * 100
-    
-    # Calculate K, D, J
-    # Using ewm(com=2) approximates the standard SMA(3) smoothing used in KDJ
     df['K'] = rsv.ewm(com=2, adjust=False).mean()
     df['D'] = df['K'].ewm(com=2, adjust=False).mean()
     df['J'] = 3 * df['K'] - 2 * df['D']
@@ -132,18 +126,24 @@ def calculate_technicals(df):
 def analyze_chart_with_gemini(ticker, df, api_key, model_name):
     if not api_key or df is None: return None
     latest = df.iloc[-1]
-    weekly_df = df.resample('W').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).tail(15)
+    
+    # --- CHANGE: Resample to MONTHLY Data for Pattern Recognition ---
+    # We take the last 12 months to give the AI a macro view
+    monthly_df = df.resample('M').agg({'High': 'max', 'Low': 'min', 'Close': 'last'}).tail(12)
+    
     price_sequence = ""
-    for date, row in weekly_df.iterrows():
-        price_sequence += f"Week {date.strftime('%Y-%m-%d')}: H {row['High']:.2f}, L {row['Low']:.2f}, C {row['Close']:.2f}\n"
+    for date, row in monthly_df.iterrows():
+        price_sequence += f"Month {date.strftime('%Y-%m')}: H {row['High']:.2f}, L {row['Low']:.2f}, C {row['Close']:.2f}\n"
 
-    # Added K, D, J to the technical data string passed to AI
+    # Pass daily indicators for precise timing/conflict resolution
     tech_data = f"""
-    Ticker: {ticker} | Price: {latest['Close']:.2f} 
+    Ticker: {ticker} | Latest Price: {latest['Close']:.2f} 
+    Daily Indicators:
     RSI: {latest['RSI']:.2f} | MACD: {latest['MACD']:.4f}
     KDJ -> K: {latest['K']:.2f} | D: {latest['D']:.2f} | J: {latest['J']:.2f}
     SMA50: {latest['SMA50']:.2f} | SMA200: {latest['SMA200']:.2f}
-    Weekly Prices:
+    
+    Monthly Price Context (Last 12 Months):
     {price_sequence}
     """
 
@@ -151,13 +151,13 @@ def analyze_chart_with_gemini(ticker, df, api_key, model_name):
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
         
-        # --- PROMPT WITH FALLBACK LOGIC ---
+        # --- PROMPT WITH MULTI-PATTERN & TIE-BREAKER LOGIC ---
         prompt = f"""
         Act as a technical analyst for {ticker}.
         {tech_data}
         
         TASK:
-        1. FIRST, check for specific chart patterns in the price data:
+        1. Analyze the MONTHLY price data for these patterns:
            - Staircases (Ascending/Descending)
            - Triangles (Ascending/Descending/Symmetrical)
            - Flags or Wedges
@@ -166,10 +166,13 @@ def analyze_chart_with_gemini(ticker, df, api_key, model_name):
            - Rounded Top/Bottom
            - Cup & Handle
 
-        2. SECOND, IF NO CLEAR PATTERN IS FOUND, use RSI and KDJ for a verdict:
-           - Overbought (SELL): RSI > 70 OR (K > 80 AND J > 100)
-           - Oversold (BUY): RSI < 30 OR (K < 20 AND J < 0)
-           - Neutral (HOLD): If indicators are in the middle.
+        2. CONFLICT RESOLUTION (Important):
+           - If MULTIPLE patterns are found, use the Daily RSI and KDJ values to decide the winner.
+           - Example: If you see a Bullish Flag but RSI > 75 (Overbought), the signal is weak or invalid (HOLD).
+           - Example: If you see a Double Bottom and KDJ is curling up from < 20 (Oversold), the signal is strong (BUY).
+        
+        3. FALLBACK:
+           - If NO pattern is found, determine the signal purely based on RSI/KDJ (Overbought=SELL, Oversold=BUY).
 
         Output strictly in this format: 
         SIGNAL ||| Pattern Name OR "Indicator Analysis" - [Reasoning]
@@ -260,7 +263,7 @@ st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
 # --- MODEL SELECTION ---
-default_model_name = "gemini-flash-latest"
+default_model_name = "gemini-flash-lite-latest"
 selected_model = default_model_name
 
 if api_key:
