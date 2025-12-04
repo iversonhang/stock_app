@@ -143,7 +143,7 @@ def get_market_scanner_data():
                 })
         except: continue
             
-    # 3. FILTER LOGIC (Updated to > 10M)
+    # 3. FILTER LOGIC (> 10 Million)
     
     def get_verified_list(candidates, ascending=True):
         # Sort by RSI first
@@ -156,10 +156,9 @@ def get_market_scanner_data():
             try:
                 # Fetch Market Cap
                 info = yf.Ticker(item['Ticker']).info
-                # Use .get(key, 0) or 0 to handle cases where marketCap is None
                 mkt_cap = info.get('marketCap', 0) or 0
                 
-                # --- CHANGED: Filter > 10 Million ---
+                # Filter > 10 Million
                 if mkt_cap > 10_000_000:
                     item['MarketCap'] = mkt_cap
                     verified.append(item)
@@ -529,10 +528,6 @@ elif page == "Stock Analyst Pro":
                             
                             with t_rev:
                                 st.markdown("#### Reversal Patterns")
-                                
-
-[Image of head and shoulders stock pattern diagram]
-
                                 rev_cols = st.columns(2)
                                 with rev_cols[0]:
                                     st.markdown("##### 🟢 Bullish (Buy)")
@@ -557,10 +552,6 @@ elif page == "Stock Analyst Pro":
 
                             with t_con:
                                 st.markdown("#### Continuation Patterns")
-                                
-
-[Image of bullish flag chart pattern]
-
                                 con_cols = st.columns(2)
                                 with con_cols[0]:
                                     st.markdown("##### 🟢 Bullish")
