@@ -99,36 +99,24 @@ def format_number(num):
 @st.cache_data(ttl=3600)
 def get_sp500_tickers():
     try:
-        # --- FIX: Use GitHub CSV instead of Wikipedia (Much more reliable) ---
+        # Use GitHub CSV for reliability
         url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
         df = pd.read_csv(url)
         return df['Symbol'].tolist()
     except Exception as e:
-        # Debugging: Print error to console
         print(f"Error fetching S&P 500 list: {e}")
-        
-        # --- Backup Method: Wikipedia with Headers ---
-        try:
-            url_wiki = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get(url_wiki, headers=headers)
-            tables = pd.read_html(io.StringIO(response.text))
-            df = tables[0]
-            return df['Symbol'].apply(lambda x: x.replace('.', '-')).tolist()
-        except:
-            # Final Fallback: Hardcoded Top 30
-            return [
-                "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "BRK-B", "V", "JNJ",
-                "WMT", "JPM", "PG", "MA", "LLY", "UNH", "XOM", "HD", "CVX", "MRK",
-                "KO", "PEP", "ABBV", "COST", "AVGO", "ADBE", "MCD", "CSCO", "CRM", "PFE"
-            ]
+        # Fallback list
+        return [
+            "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "BRK-B", "V", "JNJ",
+            "WMT", "JPM", "PG", "MA", "LLY", "UNH", "XOM", "HD", "CVX", "MRK",
+            "KO", "PEP", "ABBV", "COST", "AVGO", "ADBE", "MCD", "CSCO", "CRM", "PFE"
+        ]
 
 @st.cache_data(ttl=3600)
 def get_market_scanner_data():
     tickers = get_sp500_tickers()
     
     # 1. BATCH DOWNLOAD
-    # Using 'threads=True' for speed
     data = yf.download(tickers, period="6mo", interval="1d", group_by='ticker', threads=True)
     
     rsi_candidates = []
@@ -136,17 +124,15 @@ def get_market_scanner_data():
     # 2. CALCULATE RSI
     for ticker in tickers:
         try:
-            # Handle MultiIndex
             if isinstance(data.columns, pd.MultiIndex):
                 if ticker in data.columns.get_level_values(0):
                     df = data[ticker].copy()
                 else: continue
             else:
-                df = data # Should not happen with multiple tickers
+                df = data
             
             if len(df) < 15: continue
             
-            # RSI Calc
             delta = df['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -166,22 +152,20 @@ def get_market_scanner_data():
             
     # 3. FILTER LOGIC
     def get_verified_list(candidates, is_oversold):
-        # Sort by RSI
         sorted_list = sorted(candidates, key=lambda x: x['RSI'], reverse=not is_oversold)
-        
         verified = []
         for item in sorted_list:
             if len(verified) >= 10: break 
             
-            # --- STRICT RSI FILTER ---
-            if is_oversold and item['RSI'] >= 30: continue # Must be < 30
-            if not is_oversold and item['RSI'] <= 70: continue # Must be > 70
+            # Strict RSI Filters
+            if is_oversold and item['RSI'] >= 30: continue
+            if not is_oversold and item['RSI'] <= 70: continue
             
             try:
                 info = yf.Ticker(item['Ticker']).info
                 mkt_cap = info.get('marketCap', 0) or 0
                 
-                # --- FILTER > 10 Million ---
+                # Filter > 10 Million
                 if mkt_cap > 10_000_000:
                     item['MarketCap'] = mkt_cap
                     verified.append(item)
@@ -346,7 +330,7 @@ else:
 st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
 st.sidebar.markdown("---")
 
-default_model_name = "gemini-flash-latest"
+default_model_name = "gemini-flash-lite-latest"
 selected_model = default_model_name
 
 if api_key:
@@ -558,10 +542,6 @@ elif page == "Stock Analyst Pro":
                             
                             with t_rev:
                                 st.markdown("#### Reversal Patterns")
-                                
-
-[Image of head and shoulders stock pattern diagram]
-
                                 rev_cols = st.columns(2)
                                 with rev_cols[0]:
                                     st.markdown("##### 🟢 Bullish (Buy)")
@@ -586,10 +566,6 @@ elif page == "Stock Analyst Pro":
 
                             with t_con:
                                 st.markdown("#### Continuation Patterns")
-                                
-
-[Image of bullish flag chart pattern]
-
                                 con_cols = st.columns(2)
                                 with con_cols[0]:
                                     st.markdown("##### 🟢 Bullish")
