@@ -21,11 +21,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- SIDEBAR CONFIG ---
-st.sidebar.title("Configuration")
-api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
-st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
-
 # --- HELPER FUNCTIONS ---
 
 @st.cache_data(ttl=3600)
@@ -59,20 +54,6 @@ def get_financials_data(ticker):
     stock = yf.Ticker(ticker)
     return stock.financials, stock.balance_sheet, stock.cashflow
 
-@st.cache_data(ttl=300)
-def get_ticker_news(ticker):
-    try:
-        return yf.Ticker(ticker).news
-    except: return []
-
-def format_number(num):
-    if num:
-        if num > 1e12: return f"{num/1e12:.2f}T"
-        if num > 1e9: return f"{num/1e9:.2f}B"
-        if num > 1e6: return f"{num/1e6:.2f}M"
-        return f"{num:.2f}"
-    return "N/A"
-
 # --- CORE LOGIC: RSS + GEMINI ---
 
 def fetch_rss_feed():
@@ -84,13 +65,13 @@ def fetch_rss_feed():
         response = requests.get(url, headers=headers)
         root = ET.fromstring(response.content)
         
-        for item in root.findall('./channel/item')[:10]: # Limit to top 10 for AI speed
+        # Limit to top 10 for AI speed
+        for item in root.findall('./channel/item')[:10]: 
             title = item.find('title').text
             link = item.find('link').text
             pub_date = item.find('pubDate').text
             description = item.find('description').text if item.find('description') is not None else ""
             
-            # Basic cleanup of description for the prompt
             if description:
                 soup = BeautifulSoup(description, 'html.parser')
                 description = soup.get_text().strip()
@@ -106,49 +87,73 @@ def fetch_rss_feed():
         return []
     return items
 
-def summarize_with_gemini(news_items, api_key):
-    """
-    Sends a batch request to Gemini to summarize all headlines at once.
-    This is much faster than sending 1 request per headline.
-    """
-    if not api_key:
-        return news_items # Return raw items if no key
+def summarize_with_gemini(news_items, api_key, model_name):
+    if not api_key: return news_items 
 
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel(model_name)
         
-        # specific prompt to ensure structured output
         prompt = "Here are financial news headlines. Summarize each one into exactly 2 professional sentences for an investor. Return them separated by '|||'.\n\n"
-        
         for item in news_items:
             prompt += f"Headline: {item['title']}\nContext: {item['raw_desc']}\n\n"
 
         response = model.generate_content(prompt)
-        
-        # Split response back into list
         summaries = response.text.split('|||')
         
-        # Attach summaries to items
         for i, item in enumerate(news_items):
             if i < len(summaries):
-                cleaned_summary = summaries[i].strip()
-                # Remove any markdown junk if Gemini adds it
-                cleaned_summary = cleaned_summary.replace('**', '').replace('Headline:', '').strip()
-                item['summary'] = cleaned_summary
+                cleaned = summaries[i].strip().replace('**', '').replace('Headline:', '').strip()
+                item['summary'] = cleaned
             else:
-                item['summary'] = item['raw_desc'] # Fallback
+                item['summary'] = item['raw_desc']
                 
     except Exception as e:
-        # Fallback if AI fails
         for item in news_items:
-            item['summary'] = f"AI Error: Using raw text. {item['raw_desc']}"
+            item['summary'] = f"AI Error: {item['raw_desc']}"
             
     return news_items
 
+# --- SIDEBAR CONFIG (DYNAMIC MODEL LIST) ---
+st.sidebar.title("Configuration")
+
+# 1. API Key Input
+api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
+st.sidebar.caption("[Get an API Key](https://aistudio.google.com/app/apikey)")
+
+st.sidebar.markdown("---")
+
+# 2. Dynamic Model Selection
+selected_model = "gemini-1.5-flash" # Default fallback
+
+if api_key:
+    try:
+        genai.configure(api_key=api_key)
+        # Fetch list of models
+        models = genai.list_models()
+        
+        # Filter for models that support content generation
+        model_options = [m.name.replace("models/", "") for m in models if "generateContent" in m.supported_generation_methods]
+        
+        # Sort so newer/popular models might appear (optional)
+        model_options.sort()
+        
+        if model_options:
+            selected_model = st.sidebar.selectbox(
+                "Choose AI Model", 
+                model_options, 
+                index=model_options.index("gemini-1.5-flash") if "gemini-1.5-flash" in model_options else 0
+            )
+        else:
+            st.sidebar.warning("No generative models found for this key.")
+            
+    except Exception as e:
+        st.sidebar.error("Invalid API Key or Connection Error")
+else:
+    st.sidebar.info("Enter API Key to load available models.")
+
 # --- MAIN PAGE LAYOUT ---
 
-st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["Global Headlines", "Stock Analyst Pro"])
 
 if page == "Global Headlines":
@@ -181,11 +186,10 @@ if page == "Global Headlines":
     st.markdown("---")
 
     # News Section
-    st.subheader("AI-Powered News Briefs")
+    st.subheader(f"AI-Powered News Briefs ({selected_model})")
     
     if not api_key:
         st.warning("⚠️ Please enter your Gemini API Key in the sidebar to enable AI summaries.")
-        # Fallback to standard fetch without AI
         with st.spinner("Fetching news..."):
             raw_news = fetch_rss_feed()
             for item in raw_news:
@@ -193,15 +197,12 @@ if page == "Global Headlines":
                     st.write(item['raw_desc'])
                     st.markdown(f"[Read Source]({item['link']})")
     else:
-        with st.spinner("🤖 Gemini is reading the news for you..."):
-            # 1. Fetch Raw
+        with st.spinner(f"🤖 Gemini ({selected_model}) is analyzing the market..."):
             raw_items = fetch_rss_feed()
-            # 2. Process with AI
-            ai_news = summarize_with_gemini(raw_items, api_key)
+            ai_news = summarize_with_gemini(raw_items, api_key, selected_model)
             
             for item in ai_news:
                 summary = item.get('summary', item['raw_desc'])
-                # Parsing date for display
                 try: 
                     dt = parsedate_to_datetime(item['pub_date']).strftime("%H:%M")
                 except: dt = ""
