@@ -99,7 +99,7 @@ def format_number(num):
 @st.cache_data(ttl=3600)
 def get_sp500_tickers():
     try:
-        # --- FIX: USE REQUESTS WITH HEADERS TO BYPASS WIKIPEDIA BLOCK ---
+        # Use requests with headers to bypass Wikipedia block
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
         
@@ -112,8 +112,6 @@ def get_sp500_tickers():
         tickers = df['Symbol'].apply(lambda x: x.replace('.', '-')).tolist()
         return tickers
     except Exception as e:
-        # Debugging: Print error to console if running locally
-        print(f"Error fetching S&P 500 list: {e}")
         # Fallback list if scrape completely fails
         return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'BRK-B', 'V', 'JNJ', 'JPM', 'XOM']
 
