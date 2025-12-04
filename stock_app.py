@@ -356,10 +356,6 @@ elif page == "Stock Analyst Pro":
                             c1.metric("Inv. Head & Shoulders", "89% Success", "Bullish Reversal")
                             c2.metric("Double Bottom", "88% Success", "Bullish Reversal")
                             c3.metric("Desc. Triangle", "87% Success", "Bearish Breakout")
-                            
-
-[Image of bullish and bearish stock chart patterns]
-
                             st.markdown("---")
                             st.markdown("### 📊 Comprehensive Pattern Guide")
                             t_tr, t_rev, t_con = st.tabs(["Trend", "Reversal", "Continuation"])
