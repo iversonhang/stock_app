@@ -51,6 +51,7 @@ def search_symbol(query):
     try:
         url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=10&newsCount=0"
         headers = {'User-Agent': 'Mozilla/5.0'}
+        # Added timeout to prevent hanging
         response = requests.get(url, headers=headers, timeout=5)
         data = response.json()
         results = []
@@ -355,7 +356,7 @@ elif page == "Stock Analyst Pro":
 
                     with st.expander("📘 Reference: Chart Patterns, Signals & Success Rates"):
                             
-                            # --- MATCH CHECKER FUNCTION ---
+                            # --- MATCH CHECKER LOGIC ---
                             def check(pat):
                                 if analysis and 'reason' in analysis:
                                     reason_text = analysis['reason'].lower()
@@ -363,18 +364,18 @@ elif page == "Stock Analyst Pro":
                                     
                                     # Specific logic to avoid confusing "Head" with "Inv Head"
                                     if "inv" in pat_lower:
-                                        if "inv" in reason_text and pat_lower.replace("inv.", "").replace("inverse", "").strip() in reason_text:
-                                            return " ✅ MATCH"
+                                        if "inv" in reason_text and ("head" in reason_text or "cup" in reason_text):
+                                            return " ✅ **MATCH**"
                                     elif "head & shoulders" in pat_lower:
                                         if "head & shoulders" in reason_text and "inv" not in reason_text:
-                                            return " ✅ MATCH"
+                                            return " ✅ **MATCH**"
                                     elif "cup" in pat_lower:
                                          if "cup" in reason_text and "inv" not in reason_text:
-                                              return " ✅ MATCH"
+                                              return " ✅ **MATCH**"
                                     
-                                    # Fallback simple match
+                                    # Standard match
                                     elif pat_lower in reason_text:
-                                        return " ✅ MATCH"
+                                        return " ✅ **MATCH**"
                                 return ""
                             # -------------------------------
 
@@ -398,7 +399,7 @@ elif page == "Stock Analyst Pro":
                                     st.markdown(f"""
                                     | Pattern | Action | Trigger Point |
                                     | :--- | :--- | :--- |
-                                    | **Inv. Head & Shoulders**{check("Inv. Head")} | **BUY** | Break above Neckline |
+                                    | **Inv. Head & Shoulders**{check("Inv")} | **BUY** | Break above Neckline |
                                     | **Double Bottom**{check("Double Bottom")} | **BUY** | Break above Resistance (W shape) |
                                     | **Falling Wedge**{check("Falling Wedge")} | **BUY** | Break above Upper Trendline |
                                     """)
@@ -411,7 +412,6 @@ elif page == "Stock Analyst Pro":
                                     | **Double Top**{check("Double Top")} | **SELL** | Break below Support (M shape) |
                                     | **Rising Wedge**{check("Rising Wedge")} | **SELL** | Break below Lower Trendline |
                                     """)
-                                st.caption("Visual Examples of Bearish Reversals & Breakdowns:")
 
                             with t_con:
                                 st.markdown("#### Continuation Patterns (Mid-Trend Pauses)")
@@ -423,7 +423,7 @@ elif page == "Stock Analyst Pro":
                                     | Pattern | Action | Trigger Point |
                                     | :--- | :--- | :--- |
                                     | **Bull Flag**{check("Bull Flag")} | **BUY** | Break above the flag's upper slope |
-                                    | **Cup & Handle**{check("Cup & Handle")} | **BUY** | Break above the rim/handle resistance |
+                                    | **Cup & Handle**{check("Cup")} | **BUY** | Break above the rim/handle resistance |
                                     | **Ascending Triangle**{check("Ascending Triangle")} | **BUY** | Break above flat top resistance |
                                     """)
                                 with con_cols[1]:
