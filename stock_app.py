@@ -340,6 +340,9 @@ elif page == "Stock Analyst Pro":
                     hist = get_stock_history(selected_ticker, '2y')
                     df_tech = calculate_technicals(hist.copy())
                     
+                    # Initialize analysis variable
+                    analysis = None
+
                     if api_key and df_tech is not None:
                         analysis = analyze_chart_with_gemini(selected_ticker, df_tech, api_key, selected_model)
                         if analysis:
@@ -351,6 +354,30 @@ elif page == "Stock Analyst Pro":
                         st.warning("Enter API Key in sidebar to unlock Pattern Recognition.")
 
                     with st.expander("📘 Reference: Chart Patterns, Signals & Success Rates"):
+                            
+                            # --- MATCH CHECKER FUNCTION ---
+                            def check(pat):
+                                if analysis and 'reason' in analysis:
+                                    reason_text = analysis['reason'].lower()
+                                    pat_lower = pat.lower()
+                                    
+                                    # Specific logic to avoid confusing "Head" with "Inv Head"
+                                    if "inv" in pat_lower:
+                                        if "inv" in reason_text and pat_lower.replace("inv.", "").replace("inverse", "").strip() in reason_text:
+                                            return " ✅ MATCH"
+                                    elif "head & shoulders" in pat_lower:
+                                        if "head & shoulders" in reason_text and "inv" not in reason_text:
+                                            return " ✅ MATCH"
+                                    elif "cup" in pat_lower:
+                                         if "cup" in reason_text and "inv" not in reason_text:
+                                             return " ✅ MATCH"
+                                    
+                                    # Fallback simple match
+                                    elif pat_lower in reason_text:
+                                        return " ✅ MATCH"
+                                return ""
+                            # -------------------------------
+
                             st.markdown("### 🏆 Highest Success Patterns")
                             c1, c2, c3 = st.columns(3)
                             c1.metric("Inv. Head & Shoulders", "89% Success", "Bullish Reversal")
@@ -368,22 +395,27 @@ elif page == "Stock Analyst Pro":
                                 rev_cols = st.columns(2)
                                 with rev_cols[0]:
                                     st.markdown("##### 🟢 Bullish (Buy Signals)")
-                                    st.markdown("""
+                                    st.markdown(f"""
                                     | Pattern | Action | Trigger Point |
                                     | :--- | :--- | :--- |
-                                    | **Inv. Head & Shoulders** | **BUY** | Break above Neckline |
-                                    | **Double Bottom** | **BUY** | Break above Resistance (W shape) |
-                                    | **Falling Wedge** | **BUY** | Break above Upper Trendline |
+                                    | **Inv. Head & Shoulders**{check("Inv. Head")} | **BUY** | Break above Neckline |
+                                    | **Double Bottom**{check("Double Bottom")} | **BUY** | Break above Resistance (W shape) |
+                                    | **Falling Wedge**{check("Falling Wedge")} | **BUY** | Break above Upper Trendline |
                                     """)
                                 with rev_cols[1]:
                                     st.markdown("##### 🔴 Bearish (Sell Signals)")
-                                    st.markdown("""
+                                    st.markdown(f"""
                                     | Pattern | Action | Trigger Point |
                                     | :--- | :--- | :--- |
-                                    | **Head & Shoulders** | **SELL** | Break below Neckline |
-                                    | **Double Top** | **SELL** | Break below Support (M shape) |
-                                    | **Rising Wedge** | **SELL** | Break below Lower Trendline |
+                                    | **Head & Shoulders**{check("Head & Shoulders")} | **SELL** | Break below Neckline |
+                                    | **Double Top**{check("Double Top")} | **SELL** | Break below Support (M shape) |
+                                    | **Rising Wedge**{check("Rising Wedge")} | **SELL** | Break below Lower Trendline |
                                     """)
+                                st.caption("Visual Examples of Bearish Reversals & Breakdowns:")
+                                
+
+[Image of bullish and bearish stock chart patterns]
+
 
                             with t_con:
                                 st.markdown("#### Continuation Patterns (Mid-Trend Pauses)")
@@ -391,21 +423,21 @@ elif page == "Stock Analyst Pro":
                                 con_cols = st.columns(2)
                                 with con_cols[0]:
                                     st.markdown("##### 🟢 Bullish Setup")
-                                    st.markdown("""
+                                    st.markdown(f"""
                                     | Pattern | Action | Trigger Point |
                                     | :--- | :--- | :--- |
-                                    | **Bull Flag** | **BUY** | Break above the flag's upper slope |
-                                    | **Cup & Handle** | **BUY** | Break above the rim/handle resistance |
-                                    | **Ascending Triangle** | **BUY** | Break above flat top resistance |
+                                    | **Bull Flag**{check("Bull Flag")} | **BUY** | Break above the flag's upper slope |
+                                    | **Cup & Handle**{check("Cup & Handle")} | **BUY** | Break above the rim/handle resistance |
+                                    | **Ascending Triangle**{check("Ascending Triangle")} | **BUY** | Break above flat top resistance |
                                     """)
                                 with con_cols[1]:
                                     st.markdown("##### 🔴 Bearish Setup")
-                                    st.markdown("""
+                                    st.markdown(f"""
                                     | Pattern | Action | Trigger Point |
                                     | :--- | :--- | :--- |
-                                    | **Bear Flag** | **SELL** | Break below the flag's lower slope |
-                                    | **Inv. Cup & Handle** | **SELL** | Break below the rim support |
-                                    | **Descending Triangle** | **SELL** | Break below flat bottom support |
+                                    | **Bear Flag**{check("Bear Flag")} | **SELL** | Break below the flag's lower slope |
+                                    | **Inv. Cup & Handle**{check("Inv. Cup")} | **SELL** | Break below the rim support |
+                                    | **Descending Triangle**{check("Descending Triangle")} | **SELL** | Break below flat bottom support |
                                     """)
 
                             with t_tr:
