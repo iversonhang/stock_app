@@ -116,12 +116,12 @@ def get_ticker_news(ticker):
 def format_number(num):
     if num:
         if num > 1e12:
-            return f"${num/1e12:.2f}T"
+            return f"{num/1e12:.2f}T"
         if num > 1e9:
-            return f"${num/1e9:.2f}B"
+            return f"{num/1e9:.2f}B"
         if num > 1e6:
-            return f"${num/1e6:.2f}M"
-        return f"${num:.2f}"
+            return f"{num/1e6:.2f}M"
+        return f"{num:.2f}"
     return "N/A"
 
 
@@ -180,6 +180,7 @@ def get_market_scanner_data():
     )
 
     rsi_candidates = []
+    volume_candidates = []
 
     for ticker in tickers:
         try:
@@ -194,6 +195,7 @@ def get_market_scanner_data():
             if len(df) < 15:
                 continue
 
+            # --- RSI Logic ---
             delta = df["Close"].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -207,6 +209,23 @@ def get_market_scanner_data():
                 rsi_candidates.append(
                     {"Ticker": ticker, "Price": latest_price, "RSI": latest_rsi}
                 )
+
+            # --- Volume Breakout Logic ---
+            vol_today = df['Volume'].iloc[-1]
+            vol_yesterday = df['Volume'].iloc[-2]
+            
+            # Check if volume is > 2x yesterday AND filter out low-volume penny stock noise
+            if vol_yesterday > 0 and vol_today >= 2 * vol_yesterday:
+                avg_volume_14d = df['Volume'].tail(14).mean()
+                if avg_volume_14d > 250_000: # Ensure it's a liquid stock
+                    volume_candidates.append({
+                        "Ticker": ticker,
+                        "Price": latest_price,
+                        "Vol_Today": vol_today,
+                        "Vol_Yesterday": vol_yesterday,
+                        "Multiplier": vol_today / vol_yesterday
+                    })
+
         except:
             continue
 
@@ -237,8 +256,13 @@ def get_market_scanner_data():
 
     oversold_df = get_verified_list(rsi_candidates, is_oversold=True)
     overbought_df = get_verified_list(rsi_candidates, is_oversold=False)
+    
+    volume_df = pd.DataFrame(volume_candidates)
+    if not volume_df.empty:
+        # Sort by the biggest volume spike first, limit to top 15
+        volume_df = volume_df.sort_values(by="Multiplier", ascending=False).head(15)
 
-    return oversold_df, overbought_df, len(tickers)
+    return oversold_df, overbought_df, volume_df, len(tickers)
 
 
 # --- TECHNICAL ANALYSIS FUNCTIONS ---
@@ -564,7 +588,7 @@ if page == "Global Headlines":
 elif page == "Market Scanner":
     st.title("⚡ S&P 500 Market Scanner")
     st.markdown(
-        "Scanning stocks for extreme RSI conditions (Filtered by Market Cap > $10M)..."
+        "Scanning S&P 500 stocks for technical anomalies. Filtered by liquidity and Market Cap."
     )
 
     if st.button("🔄 Refresh Data"):
@@ -574,16 +598,105 @@ elif page == "Market Scanner":
     with st.spinner(
         "Batch processing S&P 500 data... (this runs once per hour)"
     ):
-        oversold_df, overbought_df, scanned_count = get_market_scanner_data()
+        oversold_df, overbought_df, volume_df, scanned_count = get_market_scanner_data()
         st.caption(f"✅ Successfully scanned {scanned_count} stocks.")
 
-    c1, c2 = st.columns(2)
+    # --- TABS FOR SCANNER ---
+    scan_tabs = st.tabs(["📊 RSI Extremes", "🚀 High Volume Breakouts"])
 
-    with c1:
-        st.subheader("🟢 Top 10 Oversold (Buy Candidates)")
-        st.caption("RSI < 30 indicates the stock may be undervalued.")
-        if not oversold_df.empty:
-            for i, row in oversold_df.iterrows():
+    # TAB 1: RSI SCANNER
+    with scan_tabs[0]:
+        c1, c2 = st.columns(2)
+
+        with c1:
+            st.subheader("🟢 Top 10 Oversold (Buy Candidates)")
+            st.caption("RSI < 30 indicates the stock may be undervalued.")
+            if not oversold_df.empty:
+                for i, row in oversold_df.iterrows():
+                    ai_tag = ""
+                    if api_key:
+                        res = get_quick_analysis(
+                            row["Ticker"], api_key, selected_model
+                        )
+                        if res:
+                            s = res.get("signal", "HOLD")
+                            css_class = (
+                                "tag-buy"
+                                if "BUY" in s
+                                else "tag-sell"
+                                if "SELL" in s
+                                else "tag-hold"
+                            )
+                            ai_tag = f'<span class="{css_class}">{s}</span>'
+
+                    with st.expander(f"**{row['Ticker']}** | RSI: {row['RSI']:.1f}"):
+                        if ai_tag:
+                            st.markdown(
+                                f"**AI Verdict:** {ai_tag}",
+                                unsafe_allow_html=True,
+                            )
+
+                        st.write(f"Price: ${row['Price']:.2f}")
+                        st.write(
+                            f"Market Cap: {format_number(row.get('MarketCap', 0))}"
+                        )
+                        st.button(
+                            f"Detailed Analysis {row['Ticker']}",
+                            key=f"os_{i}",
+                            on_click=go_to_ticker,
+                            args=(row["Ticker"],),
+                        )
+            else:
+                st.info("No stocks found with RSI < 30 (Market is strong).")
+
+        with c2:
+            st.subheader("🔴 Top 10 Overbought (Sell Candidates)")
+            st.caption("RSI > 70 indicates the stock may be overvalued.")
+            if not overbought_df.empty:
+                for i, row in overbought_df.iterrows():
+                    ai_tag = ""
+                    if api_key:
+                        res = get_quick_analysis(
+                            row["Ticker"], api_key, selected_model
+                        )
+                        if res:
+                            s = res.get("signal", "HOLD")
+                            css_class = (
+                                "tag-buy"
+                                if "BUY" in s
+                                else "tag-sell"
+                                if "SELL" in s
+                                else "tag-hold"
+                            )
+                            ai_tag = f'<span class="{css_class}">{s}</span>'
+
+                    with st.expander(f"**{row['Ticker']}** | RSI: {row['RSI']:.1f}"):
+                        if ai_tag:
+                            st.markdown(
+                                f"**AI Verdict:** {ai_tag}",
+                                unsafe_allow_html=True,
+                            )
+
+                        st.write(f"Price: ${row['Price']:.2f}")
+                        st.write(
+                            f"Market Cap: {format_number(row.get('MarketCap', 0))}"
+                        )
+                        st.button(
+                            f"Detailed Analysis {row['Ticker']}",
+                            key=f"ob_{i}",
+                            on_click=go_to_ticker,
+                            args=(row["Ticker"],),
+                        )
+            else:
+                st.info("No stocks found with RSI > 70 (Market is weak).")
+
+    # TAB 2: VOLUME BREAKOUTS
+    with scan_tabs[1]:
+        st.subheader("🔊 Volume Surges (> 2x Yesterday)")
+        st.caption("Stocks exhibiting massive institutional interest or momentum shifts.")
+        
+        if not volume_df.empty:
+            for i, row in volume_df.iterrows():
                 ai_tag = ""
                 if api_key:
                     res = get_quick_analysis(
@@ -600,66 +713,24 @@ elif page == "Market Scanner":
                         )
                         ai_tag = f'<span class="{css_class}">{s}</span>'
 
-                with st.expander(f"**{row['Ticker']}** | RSI: {row['RSI']:.1f}"):
+                with st.expander(f"**{row['Ticker']}** | 🚀 {row['Multiplier']:.1f}x Volume Spike"):
                     if ai_tag:
                         st.markdown(
                             f"**AI Verdict:** {ai_tag}",
                             unsafe_allow_html=True,
                         )
 
-                    st.write(f"Price: ${row['Price']:.2f}")
-                    st.write(
-                        f"Market Cap: {format_number(row.get('MarketCap', 0))}"
-                    )
+                    st.write(f"**Price:** ${row['Price']:.2f}")
+                    st.write(f"**Vol Today:** {format_number(row['Vol_Today'])}")
+                    st.write(f"**Vol Yesterday:** {format_number(row['Vol_Yesterday'])}")
                     st.button(
-                        f"Detailed Analysis {row['Ticker']}",
-                        key=f"os_{i}",
+                        f"Analyze Chart {row['Ticker']}",
+                        key=f"vol_{i}",
                         on_click=go_to_ticker,
                         args=(row["Ticker"],),
                     )
         else:
-            st.info("No stocks found with RSI < 30 (Market is strong).")
-
-    with c2:
-        st.subheader("🔴 Top 10 Overbought (Sell Candidates)")
-        st.caption("RSI > 70 indicates the stock may be overvalued.")
-        if not overbought_df.empty:
-            for i, row in overbought_df.iterrows():
-                ai_tag = ""
-                if api_key:
-                    res = get_quick_analysis(
-                        row["Ticker"], api_key, selected_model
-                    )
-                    if res:
-                        s = res.get("signal", "HOLD")
-                        css_class = (
-                            "tag-buy"
-                            if "BUY" in s
-                            else "tag-sell"
-                            if "SELL" in s
-                            else "tag-hold"
-                        )
-                        ai_tag = f'<span class="{css_class}">{s}</span>'
-
-                with st.expander(f"**{row['Ticker']}** | RSI: {row['RSI']:.1f}"):
-                    if ai_tag:
-                        st.markdown(
-                            f"**AI Verdict:** {ai_tag}",
-                            unsafe_allow_html=True,
-                        )
-
-                    st.write(f"Price: ${row['Price']:.2f}")
-                    st.write(
-                        f"Market Cap: {format_number(row.get('MarketCap', 0))}"
-                    )
-                    st.button(
-                        f"Detailed Analysis {row['Ticker']}",
-                        key=f"ob_{i}",
-                        on_click=go_to_ticker,
-                        args=(row["Ticker"],),
-                    )
-        else:
-            st.info("No stocks found with RSI > 70 (Market is weak).")
+            st.info("No significant volume breakouts detected today.")
 
 elif page == "Stock Analyst Pro":
     st.title("🔎 Stock Technical Analyzer")
