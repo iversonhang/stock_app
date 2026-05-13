@@ -1,16 +1,16 @@
-from datetime import datetime
-import io
-import json
 import xml.etree.ElementTree as ET
-from bs4 import BeautifulSoup
+from datetime import datetime
 from email.utils import parsedate_to_datetime
+import json
+
 import google.generativeai as genai
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import requests
 import streamlit as st
 import yfinance as yf
+from bs4 import BeautifulSoup
+from plotly.subplots import make_subplots
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Wall St. Pulse", page_icon="📈", layout="wide")
@@ -326,7 +326,6 @@ def analyze_chart_with_gemini_cached(
 
         try:
             data = json.loads(text)
-            # Ensure safe fallback mapping across structural fields
             data["reason"] = data.get("reasoning", data.get("reason", ""))
             return data
         except json.JSONDecodeError:
@@ -414,9 +413,6 @@ def summarize_news_with_gemini(news_items, api_key, model_name):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_quick_analysis(ticker, api_key, model_name):
-    """
-    Optimized to minimize runtime processing checks.
-    """
     try:
         hist = yf.Ticker(ticker).history(period="1y")
         df = calculate_technicals(hist)
@@ -596,9 +592,9 @@ elif page == "Market Scanner":
                         css_class = (
                             "tag-buy"
                             if "BUY" in s
-                            : "tag-sell"
+                            else "tag-sell"
                             if "SELL" in s
-                            : "tag-hold"
+                            else "tag-hold"
                         )
                         ai_tag = f'<span class="{css_class}">{s}</span>'
 
@@ -637,9 +633,9 @@ elif page == "Market Scanner":
                         css_class = (
                             "tag-buy"
                             if "BUY" in s
-                            : "tag-sell"
+                            else "tag-sell"
                             if "SELL" in s
-                            : "tag-hold"
+                            else "tag-hold"
                         )
                         ai_tag = f'<span class="{css_class}">{s}</span>'
 
@@ -774,7 +770,6 @@ elif page == "Stock Analyst Pro":
 
                         def check(pat):
                             if analysis:
-                                # Standardize cross field retrieval checks
                                 reason_text = (
                                     str(analysis.get("reason", ""))
                                     + str(analysis.get("pattern_name", ""))
