@@ -420,8 +420,10 @@ def get_quick_analysis(ticker, api_key, model_name):
             return None
 
         latest = df.iloc[-1]
+        
+        df.index = pd.to_datetime(df.index)
         monthly_df = (
-            df.resample("M")
+            df.resample("ME")
             .agg({"High": "max", "Low": "min", "Close": "last"})
             .tail(12)
         )
@@ -714,51 +716,57 @@ elif page == "Stock Analyst Pro":
 
                     analysis = None
 
-                    if api_key and df_tech is not None:
+                    if api_key and df_tech is not None and not df_tech.empty:
                         latest = df_tech.iloc[-1]
-                        monthly_df = (
-                            df_tech.resample("M")
-                            .agg(
-                                {
-                                    "High": "max",
-                                    "Low": "min",
-                                    "Close": "last",
-                                }
+                        
+                        df_tech.index = pd.to_datetime(df_tech.index)
+                        
+                        try:
+                            monthly_df = (
+                                df_tech.resample("ME")
+                                .agg(
+                                    {
+                                        "High": "max",
+                                        "Low": "min",
+                                        "Close": "last",
+                                    }
+                                )
+                                .tail(24)
                             )
-                            .tail(24)
-                        )
 
-                        monthly_str = ""
-                        for date, row in monthly_df.iterrows():
-                            monthly_str += f"Date {date.strftime('%Y-%m-%d')}: H {row['High']:.2f}, L {row['Low']:.2f}, C {row['Close']:.2f}\n"
+                            monthly_str = ""
+                            for date, row in monthly_df.iterrows():
+                                monthly_str += f"Date {date.strftime('%Y-%m-%d')}: H {row['High']:.2f}, L {row['Low']:.2f}, C {row['Close']:.2f}\n"
 
-                        indicators_str = f"Latest Price: {latest['Close']:.2f}\nRSI: {latest['RSI']:.2f} | MACD: {latest['MACD']:.4f}\nKDJ -> K: {latest['K']:.2f} | D: {latest['D']:.2f} | J: {latest['J']:.2f}"
+                            indicators_str = f"Latest Price: {latest['Close']:.2f}\nRSI: {latest['RSI']:.2f} | MACD: {latest['MACD']:.4f}\nKDJ -> K: {latest['K']:.2f} | D: {latest['D']:.2f} | J: {latest['J']:.2f}"
 
-                        analysis = analyze_chart_with_gemini_cached(
-                            selected_ticker,
-                            monthly_str,
-                            indicators_str,
-                            api_key,
-                            selected_model,
-                        )
-
-                        if analysis:
-                            sig = analysis.get("signal", "HOLD")
-                            reason = analysis.get(
-                                "reason", "No analysis returned."
+                            analysis = analyze_chart_with_gemini_cached(
+                                selected_ticker,
+                                monthly_str,
+                                indicators_str,
+                                api_key,
+                                selected_model,
                             )
-                            css = (
-                                "buy"
-                                if "BUY" in sig
-                                else "sell"
-                                if "SELL" in sig
-                                else "hold"
-                            )
-                            st.markdown(
-                                f'<div class="signal-box {css}">VERDICT: {sig}</div>',
-                                unsafe_allow_html=True,
-                            )
-                            st.info(f"**AI Analysis:** {reason}")
+
+                            if analysis:
+                                sig = analysis.get("signal", "HOLD")
+                                reason = analysis.get(
+                                    "reason", "No analysis returned."
+                                )
+                                css = (
+                                    "buy"
+                                    if "BUY" in sig
+                                    else "sell"
+                                    if "SELL" in sig
+                                    else "hold"
+                                )
+                                st.markdown(
+                                    f'<div class="signal-box {css}">VERDICT: {sig}</div>',
+                                    unsafe_allow_html=True,
+                                )
+                                st.info(f"**AI Analysis:** {reason}")
+                        except Exception as e:
+                            st.error(f"Error resampling chart data: {e}")
                     elif not api_key:
                         st.warning(
                             "Enter API Key in sidebar to unlock Pattern Recognition."
